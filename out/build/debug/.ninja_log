@@ -1,0 +1,18 @@
+# ninja log v6
+71	3188	8053618778690649	CommBenchPro_autogen/timestamp	c05a1298e148aa30
+71	3188	8053618778690649	CommBenchPro_autogen/mocs_compilation.cpp	c05a1298e148aa30
+71	3188	8053618778690649	E:/code/QT/SerialEvaluation/out/build/debug/CommBenchPro_autogen/timestamp	c05a1298e148aa30
+71	3188	8053618778690649	E:/code/QT/SerialEvaluation/out/build/debug/CommBenchPro_autogen/mocs_compilation.cpp	c05a1298e148aa30
+3309	10595	8053618783143798	CMakeFiles/CommBenchPro.dir/src/main.cpp.obj	aa76d2ff02a6176e
+3877	10608	8053618788832414	CMakeFiles/CommBenchPro.dir/src/statisticsmanager.cpp.obj	ab35d5fa6a69b6d4
+3202	10613	8053618782075501	CMakeFiles/CommBenchPro.dir/CommBenchPro_autogen/mocs_compilation.cpp.obj	7f32bbda486941ff
+3563	10619	8053618785688484	CMakeFiles/CommBenchPro.dir/src/tcpclientworker.cpp.obj	b415a9126ccfb01f
+3833	10626	8053618788387682	CMakeFiles/CommBenchPro.dir/src/serialclientworker.cpp.obj	9809d244fd4a019c
+3403	10651	8053618784094252	CMakeFiles/CommBenchPro.dir/src/mainwindow.cpp.obj	aae69f53f67a3927
+10654	18119	8053618856594535	CommBenchPro.exe	d3c5107db6c838c7
+24	938	8053739815583051	CommBenchPro_autogen/timestamp	c05a1298e148aa30
+24	938	8053739815583051	CommBenchPro_autogen/mocs_compilation.cpp	c05a1298e148aa30
+24	938	8053739815583051	E:/code/QT/SerialEvaluation/out/build/debug/CommBenchPro_autogen/timestamp	c05a1298e148aa30
+24	938	8053739815583051	E:/code/QT/SerialEvaluation/out/build/debug/CommBenchPro_autogen/mocs_compilation.cpp	c05a1298e148aa30
+940	3898	8053739824742828	CMakeFiles/CommBenchPro.dir/src/mainwindow.cpp.obj	aae69f53f67a3927
+3899	4986	8053739854339517	CommBenchPro.exe	d3c5107db6c838c7

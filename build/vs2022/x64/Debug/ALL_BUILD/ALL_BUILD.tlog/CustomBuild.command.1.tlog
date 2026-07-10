@@ -1,0 +1,10 @@
+^E:\CODE\QT\SERIALEVALUATION\CMAKELISTS.TXT
+setlocal
+D:\Soft\middleware\cmake\bin\cmake.exe -SE:/code/QT/SerialEvaluation -BE:/code/QT/SerialEvaluation/build/vs2022 --check-stamp-file E:/code/QT/SerialEvaluation/build/vs2022/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

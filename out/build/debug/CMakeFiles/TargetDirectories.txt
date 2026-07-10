@@ -1,0 +1,5 @@
+E:/code/QT/SerialEvaluation/out/build/debug/CMakeFiles/CommBenchPro.dir
+E:/code/QT/SerialEvaluation/out/build/debug/CMakeFiles/edit_cache.dir
+E:/code/QT/SerialEvaluation/out/build/debug/CMakeFiles/rebuild_cache.dir
+E:/code/QT/SerialEvaluation/out/build/debug/CMakeFiles/CommBenchPro_autogen_timestamp_deps.dir
+E:/code/QT/SerialEvaluation/out/build/debug/CMakeFiles/CommBenchPro_autogen.dir

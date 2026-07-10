@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\code\QT\SerialEvaluation\build\vs2022\CMakeFiles\b6ebfb8c10a9d98fdd75f467cbda88e2\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{C547F01E-B2A5-38CD-984F-3D6B888A075B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
