@@ -22,6 +22,8 @@ set(PROJECT_SOURCES
     src/mainwindow.ui
     src/namespace.h
     src/icommunicationinterface.h
+    src/fixedlengthframedecoder.h
+    src/fixedlengthframedecoder.cpp
     src/tcpclientworker.h
     src/tcpclientworker.cpp
     src/serialclientworker.h
@@ -58,4 +60,17 @@ target_include_directories(CommBenchPro PRIVATE
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(CommBenchPro)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(FixedLengthFrameDecoderTest
+        tests/fixedlengthframedecoder_test.cpp
+        src/fixedlengthframedecoder.h
+        src/fixedlengthframedecoder.cpp
+        src/namespace.h
+    )
+    target_include_directories(FixedLengthFrameDecoderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(FixedLengthFrameDecoderTest PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+    add_test(NAME FixedLengthFrameDecoderTest COMMAND FixedLengthFrameDecoderTest)
 endif()

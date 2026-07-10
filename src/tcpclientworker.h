@@ -1,6 +1,7 @@
 #ifndef TCPCLIENTWORKER_H
 #define TCPCLIENTWORKER_H
 
+#include "fixedlengthframedecoder.h"
 #include "icommunicationinterface.h"
 #include "namespace.h"
 
@@ -21,7 +22,7 @@ public:
      * @param  parent Qt父对象
      * @return void
      */
-    explicit TcpClientWorker(QString host, quint16 port, QObject *parent = nullptr);
+    explicit TcpClientWorker(QString host, quint16 port, int frameLength = 9, QObject *parent = nullptr);
 
     /**
      * @brief  ~TcpClientWorker 默认析构函数
@@ -95,6 +96,9 @@ private:
 
     /** 目标端口号 */
     quint16 m_port;
+
+    /** TCP 字节流固定长度分帧器 */
+    FixedLengthFrameDecoder m_frameDecoder;
 
     /** Qt TCP 套接字对象 */
     QTcpSocket *m_socket = nullptr;

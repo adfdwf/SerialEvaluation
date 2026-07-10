@@ -104,6 +104,16 @@
           <item>
            <widget class="QSpinBox" name="spinBoxPort"/>
           </item>
+         <item>
+          <widget class="QLabel" name="labelTcpFrameLength">
+           <property name="text">
+            <string>Response bytes</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="spinBoxTcpFrameLength"/>
+         </item>
          </layout>
         </widget>
        </item>

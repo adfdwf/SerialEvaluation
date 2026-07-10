@@ -7,10 +7,34 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QLabel>
 #include <QMetaObject>
 #include <QScrollBar>
 #include <QSerialPortInfo>
+#include <QSpinBox>
 #include <QTextStream>
+
+namespace {
+
+constexpr int kDefaultTcpFrameLength = 9;
+
+QSpinBox *tcpFrameLengthSpinBox(Ui::MainWindow *ui)
+{
+    if (auto *spinBox = ui->centralwidget->findChild<QSpinBox *>(QStringLiteral("spinBoxTcpFrameLength"))) {
+        return spinBox;
+    }
+
+    auto *label = new QLabel(QStringLiteral("Response bytes"), ui->widgetTcpConfig);
+    label->setObjectName(QStringLiteral("labelTcpFrameLength"));
+    ui->horizontalLayoutTcp->addWidget(label);
+
+    auto *spinBox = new QSpinBox(ui->widgetTcpConfig);
+    spinBox->setObjectName(QStringLiteral("spinBoxTcpFrameLength"));
+    ui->horizontalLayoutTcp->addWidget(spinBox);
+    return spinBox;
+}
+
+} // namespace
 
 BEGIN_NAMESPACE_CIQTEK
 
@@ -54,6 +78,9 @@ void MainWindow::setupUiLogic()
 
     ui->spinBoxPort->setRange(1, 65535);
     ui->spinBoxPort->setValue(10160);
+    auto *tcpFrameLength = tcpFrameLengthSpinBox(ui);
+    tcpFrameLength->setRange(1, 65535);
+    tcpFrameLength->setValue(kDefaultTcpFrameLength);
     ui->spinBoxInterval->setRange(1, 600000);
     ui->spinBoxInterval->setValue(1000);
     ui->spinBoxSendCount->setRange(0, 100000000);
@@ -71,7 +98,7 @@ void MainWindow::setupUiLogic()
     ui->comboBoxParity->addItems({QStringLiteral("None"), QStringLiteral("Even"), QStringLiteral("Odd"), QStringLiteral("Mark"), QStringLiteral("Space")});
 
     ui->lineEditIp->setText(QStringLiteral("172.16.32.231"));
-    ui->lineEditCommand->setText(QStringLiteral("PING"));
+    ui->lineEditCommand->setText(QStringLiteral("A0 81 01 00 00 00 00 00 22"));
     ui->pushButtonStop->setEnabled(false);
 
     QObject::connect(ui->comboBoxMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::slotModeChanged);
@@ -377,7 +404,9 @@ void MainWindow::createWorker()
     m_commThread = new QThread(this);
 
     if (ui->comboBoxMode->currentIndex() == 0) {
-        auto *worker = new TcpClientWorker(ui->lineEditIp->text().trimmed(), static_cast<quint16>(ui->spinBoxPort->value()));
+        auto *worker = new TcpClientWorker(ui->lineEditIp->text().trimmed(),
+                                           static_cast<quint16>(ui->spinBoxPort->value()),
+                                           tcpFrameLengthSpinBox(ui)->value());
         m_workerObject = worker;
         m_commInterface = worker;
     } else {
@@ -606,7 +635,10 @@ QString MainWindow::currentModeDescription() const
 QString MainWindow::currentConfigDescription() const
 {
     if (ui->comboBoxMode->currentIndex() == 0) {
-        return QStringLiteral("%1:%2").arg(ui->lineEditIp->text().trimmed()).arg(ui->spinBoxPort->value());
+        return QStringLiteral("%1:%2, response frame %3 bytes")
+            .arg(ui->lineEditIp->text().trimmed())
+            .arg(ui->spinBoxPort->value())
+            .arg(tcpFrameLengthSpinBox(ui)->value());
     }
 
     return QStringLiteral("%1, %2 bps, %3 data, %4 stop, %5 parity")

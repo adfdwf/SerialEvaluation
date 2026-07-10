@@ -11,8 +11,8 @@ BEGIN_NAMESPACE_CIQTEK
  * @param  parent Qt父对象
  * @return void
  */
-TcpClientWorker::TcpClientWorker(QString host, quint16 port, QObject *parent)
-    : QObject(parent), m_host(std::move(host)), m_port(port)
+TcpClientWorker::TcpClientWorker(QString host, quint16 port, int frameLength, QObject *parent)
+    : QObject(parent), m_host(std::move(host)), m_port(port), m_frameDecoder(frameLength)
 {
 }
 
@@ -37,9 +37,19 @@ void TcpClientWorker::connect()
         m_socket->moveToThread(thread());
 
         QObject::connect(m_socket, &QTcpSocket::connected, this, &TcpClientWorker::signalConnected);
-        QObject::connect(m_socket, &QTcpSocket::disconnected, this, &TcpClientWorker::signalDisconnected);
+        QObject::connect(m_socket, &QTcpSocket::disconnected, this, [this]() {
+            const int incompleteBytes = m_frameDecoder.bufferedByteCount();
+            m_frameDecoder.clear();
+            if (incompleteBytes > 0) {
+                emit signalErrorOccurred(QStringLiteral("TCP 连接断开，丢弃 %1 字节不完整响应帧").arg(incompleteBytes));
+            }
+            emit signalDisconnected();
+        });
         QObject::connect(m_socket, &QTcpSocket::readyRead, this, [this]() {
-            emit signalDataReceived(m_socket->readAll());
+            const QVector<QByteArray> frames = m_frameDecoder.appendData(m_socket->readAll());
+            for (const QByteArray &frame : frames) {
+                emit signalDataReceived(frame);
+            }
         });
         QObject::connect(m_socket, &QTcpSocket::bytesWritten, this, &TcpClientWorker::signalBytesWritten);
         QObject::connect(m_socket,
@@ -59,6 +69,7 @@ void TcpClientWorker::connect()
         return;
     }
 
+    m_frameDecoder.clear();
     m_socket->connectToHost(m_host, m_port);
 }
 
