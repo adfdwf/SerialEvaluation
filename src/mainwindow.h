@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QLineEdit>
 #include <QMainWindow>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QString>
 #include <QThread>
@@ -97,6 +98,7 @@ private:
     bool validateHexSyntax(const QString &text);
     void setupStatsLabels();
     void scheduleStatsRefresh();
+    void scheduleNextSend(int intervalMs);
 
 private:
     Ui::MainWindow *ui = nullptr;
@@ -108,6 +110,8 @@ private:
     QTimer *m_sendTimer = nullptr;
     QTimer *m_timeoutTimer = nullptr;
     QTimer *m_statsTimer = nullptr;
+    QElapsedTimer m_sendClock;
+    qint64 m_nextSendDeadlineMs = 0;
     bool m_testRunning = false;
     bool m_finishingAfterLimit = false;
     int m_currentCommandIndex = 0;

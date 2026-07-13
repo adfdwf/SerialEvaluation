@@ -41,6 +41,8 @@ MainWindow::~MainWindow()
 void MainWindow::setupUiLogic()
 {
     m_sendTimer = new QTimer(this);
+    m_sendTimer->setSingleShot(true);
+    m_sendTimer->setTimerType(Qt::PreciseTimer);
     m_timeoutTimer = new QTimer(this);
     m_timeoutTimer->setInterval(200);
     m_statsTimer = new QTimer(this);
@@ -419,12 +421,9 @@ void MainWindow::slotStartClicked()
                                  .arg(ui->spinBoxSendCount->value() == 0 ? QStringLiteral("unlimited") : QString::number(ui->spinBoxSendCount->value()))
                                  .arg(commands.size()));
 
-    // 在启动定时器前设置 Interval，确保实时生效
-    m_sendTimer->setInterval(ui->spinBoxInterval->value());
+    m_sendClock.start();
+    m_nextSendDeadlineMs = 0;
     slotSendNextPacket();
-    if (m_testRunning && !m_finishingAfterLimit) {
-        m_sendTimer->start();
-    }
 }
 
 void MainWindow::slotStopClicked()
@@ -438,9 +437,8 @@ void MainWindow::slotSendNextPacket()
         return;
     }
 
-    // 每次发送前重新读取 Interval，确保用户动态调整实时生效
+    // 每次发送前重新读取 Interval，确保用户动态调整实时生效。
     const int intervalMs = ui->spinBoxInterval->value();
-    m_sendTimer->setInterval(intervalMs);
 
     const int targetPerCommand = ui->spinBoxSendCount->value();
 
@@ -495,8 +493,9 @@ void MainWindow::slotSendNextPacket()
     }
 
     if (payload.isEmpty()) {
-        // payload 为空时跳过本条命令，继续下一条，不中断定时器
+        // payload 为空时跳过本条命令，继续下一条，不中断发送调度。
         m_currentCommandIndex = (m_currentCommandIndex + 1) % commands.size();
+        scheduleNextSend(intervalMs);
         return;
     }
 
@@ -508,6 +507,30 @@ void MainWindow::slotSendNextPacket()
 
     // 移到下一条命令，下次 timer 触发时发送
     m_currentCommandIndex = (m_currentCommandIndex + 1) % commands.size();
+    scheduleNextSend(intervalMs);
+}
+
+void MainWindow::scheduleNextSend(int intervalMs)
+{
+    if (!m_testRunning || m_finishingAfterLimit) {
+        return;
+    }
+
+    const qint64 nowMs = m_sendClock.elapsed();
+    if (m_nextSendDeadlineMs == 0) {
+        m_nextSendDeadlineMs = nowMs + intervalMs;
+    } else {
+        // 基于上一次的目标时刻推进，而不是从当前时刻重新计时，避免调度延迟累计。
+        m_nextSendDeadlineMs += intervalMs;
+        if (m_nextSendDeadlineMs <= nowMs) {
+            // 主线程阻塞超过一个周期时跳过已错过的时刻，避免恢复后突发连续发送。
+            const qint64 missedIntervals = (nowMs - m_nextSendDeadlineMs) / intervalMs + 1;
+            m_nextSendDeadlineMs += missedIntervals * intervalMs;
+        }
+    }
+
+    const qint64 remainingMs = qMax<qint64>(1, m_nextSendDeadlineMs - m_sendClock.elapsed());
+    m_sendTimer->start(static_cast<int>(remainingMs));
 }
 
 void MainWindow::slotCheckTimeouts()
