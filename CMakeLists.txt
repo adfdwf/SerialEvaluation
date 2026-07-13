@@ -16,6 +16,7 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Network SerialPort)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Network SerialPort)
 
 set(PROJECT_SOURCES
+    src/resources.rc
     src/main.cpp
     src/mainwindow.h
     src/mainwindow.cpp
