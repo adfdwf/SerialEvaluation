@@ -1,24 +1,16 @@
 #include "statisticsmanager.h"
 
 #include <limits>
+#include <algorithm>
 
 BEGIN_NAMESPACE_CIQTEK
 
-/**
- * @brief  StatisticsManager 默认构造函数
- * @param  parent Qt父对象
- * @return void
- */
 StatisticsManager::StatisticsManager(QObject *parent)
     : QObject(parent)
 {
     reset();
 }
 
-/**
- * @brief  reset 重置所有统计数据
- * @return void
- */
 void StatisticsManager::reset()
 {
     m_timer.restart();
@@ -28,11 +20,6 @@ void StatisticsManager::reset()
     m_indexById.clear();
 }
 
-/**
- * @brief  recordSend 记录一次发送数据
- * @param  payload 发送负载
- * @return PacketInfo 本次发送的数据包信息
- */
 PacketInfo StatisticsManager::recordSend(const QByteArray &payload)
 {
     PacketInfo packet;
@@ -47,15 +34,8 @@ PacketInfo StatisticsManager::recordSend(const QByteArray &payload)
     return packet;
 }
 
-/**
- * @brief  recordReceive 记录一次接收数据并匹配最早未完成包
- * @param  payload 接收负载
- * @param  updatedPacket 输出更新后的数据包信息
- * @return bool true表示匹配成功，false表示无待匹配数据包
- */
 bool StatisticsManager::recordReceive(const QByteArray &payload, PacketInfo *updatedPacket)
 {
-    // 串口/TCP 回包通常不带业务 ID，按发送 FIFO 队列匹配最早未完成的包。
     while (!m_pendingIds.isEmpty()) {
         const quint64 id = m_pendingIds.dequeue();
         const int index = m_indexById.value(id, -1);
@@ -77,14 +57,8 @@ bool StatisticsManager::recordReceive(const QByteArray &payload, PacketInfo *upd
     return false;
 }
 
-/**
- * @brief  markTimeouts 标记超过超时时间的数据包
- * @param  timeoutMs 超时时间，单位毫秒
- * @return QVector<PacketInfo> 已超时数据包列表
- */
 QVector<PacketInfo> StatisticsManager::markTimeouts(qint64 timeoutMs)
 {
-    // 使用单调时钟判断超时，避免系统时间调整影响性能统计。
     QVector<PacketInfo> timedOut;
     const qint64 now = m_timer.elapsed();
 
@@ -102,10 +76,6 @@ QVector<PacketInfo> StatisticsManager::markTimeouts(qint64 timeoutMs)
     return timedOut;
 }
 
-/**
- * @brief  markAllPendingLost 将所有待回包数据标记为丢包
- * @return QVector<PacketInfo> 被标记的丢包列表
- */
 QVector<PacketInfo> StatisticsManager::markAllPendingLost()
 {
     QVector<PacketInfo> lost;
@@ -120,10 +90,6 @@ QVector<PacketInfo> StatisticsManager::markAllPendingLost()
     return lost;
 }
 
-/**
- * @brief  hasPendingPackets 判断是否仍有待回包数据
- * @return bool true表示存在待回包数据
- */
 bool StatisticsManager::hasPendingPackets() const
 {
     for (const PacketInfo &packet : m_packets) {
@@ -134,10 +100,6 @@ bool StatisticsManager::hasPendingPackets() const
     return false;
 }
 
-/**
- * @brief  snapshot 获取统计快照
- * @return StatisticsSnapshot 当前统计快照
- */
 StatisticsSnapshot StatisticsManager::snapshot() const
 {
     StatisticsSnapshot snap;
@@ -165,24 +127,41 @@ StatisticsSnapshot StatisticsManager::snapshot() const
         snap.averageElapsedMs = static_cast<double>(sum) / static_cast<double>(snap.successReceived);
         snap.minElapsedMs = minValue;
         snap.maxElapsedMs = maxValue;
+
+        QVector<qint64> elapsedList;
+        elapsedList.reserve(static_cast<int>(snap.successReceived));
+        for (const PacketInfo &packet : m_packets) {
+            if (packet.status == PacketInfo::Status::Success) {
+                elapsedList.push_back(packet.elapsedMs);
+            }
+        }
+
+        std::sort(elapsedList.begin(), elapsedList.end());
+
+        const int n = elapsedList.size();
+        auto percentile = [&](double p) -> double {
+            if (n == 0) return 0.0;
+            double rank = p * (n - 1);
+            int lo = static_cast<int>(rank);
+            int hi = qMin(lo + 1, n - 1);
+            double frac = rank - lo;
+            return static_cast<double>(elapsedList[lo]) * (1.0 - frac) + static_cast<double>(elapsedList[hi]) * frac;
+        };
+
+        snap.p50Ms = percentile(0.50);
+        snap.p90Ms = percentile(0.90);
+        snap.p95Ms = percentile(0.95);
+        snap.p99Ms = percentile(0.99);
     }
 
     return snap;
 }
 
-/**
- * @brief  packets 获取完整数据包列表
- * @return const QVector<PacketInfo>& 数据包只读引用
- */
 const QVector<PacketInfo> &StatisticsManager::packets() const
 {
     return m_packets;
 }
 
-/**
- * @brief  rebuildPendingQueue 重建待回包队列
- * @return void
- */
 void StatisticsManager::rebuildPendingQueue()
 {
     m_pendingIds.clear();

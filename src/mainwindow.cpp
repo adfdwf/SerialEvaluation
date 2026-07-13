@@ -6,6 +6,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QLabel>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QMetaObject>
@@ -27,7 +28,7 @@ MainWindow::MainWindow(QWidget *parent)
     slotRefreshSerialPorts();
     slotModeChanged(ui->comboBoxMode->currentIndex());
     setConnectionState(ConnectionState::Disconnected);
-    updateStatsView();
+    scheduleStatsRefresh();
 }
 
 MainWindow::~MainWindow()
@@ -42,6 +43,9 @@ void MainWindow::setupUiLogic()
     m_sendTimer = new QTimer(this);
     m_timeoutTimer = new QTimer(this);
     m_timeoutTimer->setInterval(200);
+    m_statsTimer = new QTimer(this);
+    m_statsTimer->setInterval(100);
+    QObject::connect(m_statsTimer, &QTimer::timeout, this, &MainWindow::updateStatsView);
 
     ui->spinBoxPort->setRange(1, 65535);
     ui->spinBoxPort->setValue(10160);
@@ -63,6 +67,7 @@ void MainWindow::setupUiLogic()
     ui->lineEditIp->setText(QStringLiteral("172.16.32.231"));
 
     setupCommandTable();
+    setupStatsLabels();
 
     ui->pushButtonStop->setEnabled(false);
 
@@ -318,7 +323,7 @@ void MainWindow::slotSendAllClicked()
         appendLog(LogLevel::Tx, QStringLiteral("[SendAll] #%1 %2").arg(packet.id).arg(item.text));
         QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
     }
-    updateStatsView();
+    scheduleStatsRefresh();
 }
 
 void MainWindow::applyIndustrialTheme()
@@ -475,7 +480,7 @@ void MainWindow::slotSendNextPacket()
     const PacketInfo packet = m_statistics.recordSend(payload);
     appendLog(LogLevel::Tx, QStringLiteral("#%1 %2").arg(packet.id).arg(item.text));
     QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
-    updateStatsView();
+    scheduleStatsRefresh();
 
     if (targetCount > 0 && packet.id >= static_cast<quint64>(targetCount)) {
         m_sendTimer->stop();
@@ -497,7 +502,7 @@ void MainWindow::slotCheckTimeouts()
         appendLog(LogLevel::Error, QStringLiteral("#%1 timeout/lost").arg(packet.id), packet.elapsedMs);
     }
     if (!timedOut.isEmpty()) {
-        updateStatsView();
+        scheduleStatsRefresh();
     }
     checkFinishAfterLimit();
 }
@@ -527,7 +532,7 @@ void MainWindow::slotWorkerDataReceived(const QByteArray &data)
     } else {
         appendLog(LogLevel::Rx, QStringLiteral("Unmatched response %1").arg(payloadToDisplay(data)));
     }
-    updateStatsView();
+    scheduleStatsRefresh();
     checkFinishAfterLimit();
 }
 
@@ -643,11 +648,47 @@ void MainWindow::updateStatsView()
     ui->labelSuccessValue->setText(QString::number(snap.successReceived));
     ui->labelLostValue->setText(QString::number(snap.lostPackets));
     ui->labelRateValue->setText(QStringLiteral("%1%").arg(snap.successRate, 0, 'f', 2));
-    ui->labelAverageValue->setText(QStringLiteral("%1 ms").arg(snap.averageElapsedMs, 0, 'f', 2));
+    ui->labelAverageValue->setText(QStringLiteral("%1 ms").arg(snap.averageElapsedMs, 0, 'f', 3));
     ui->labelMaxValue->setText(QStringLiteral("%1 ms").arg(snap.maxElapsedMs));
     ui->labelMinValue->setText(QStringLiteral("%1 ms").arg(snap.minElapsedMs));
+
+    auto setLabel = [&](const QString &objName, const QString &text) {
+        auto *label = ui->groupBoxStats->findChild<QLabel*>(objName);
+        if (label) label->setText(text);
+    };
+
+    
+
+
+    
 }
 
+void MainWindow::setupStatsLabels()
+{
+    // 在统计区已有的 Min 行下方插入百分位指标行
+    int row = 8;
+
+    auto addRow = [&](const QString &title, const QString &objName) {
+        auto *label = new QLabel(title, ui->groupBoxStats);
+        auto *value = new QLabel(QStringLiteral("--"), ui->groupBoxStats);
+        value->setObjectName(objName);
+        ui->gridLayoutStats->addWidget(label, row, 0);
+        ui->gridLayoutStats->addWidget(value, row, 1);
+        ++row;
+    };
+
+    addRow(QStringLiteral("P50"), QStringLiteral("labelP50Value"));
+    addRow(QStringLiteral("P90"), QStringLiteral("labelP90Value"));
+    addRow(QStringLiteral("P95"), QStringLiteral("labelP95Value"));
+    addRow(QStringLiteral("P99"), QStringLiteral("labelP99Value"));
+}
+
+void MainWindow::scheduleStatsRefresh()
+{
+    if (!m_statsTimer->isActive()) {
+        m_statsTimer->start();
+    }
+}
 void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs)
 {
     QString tag;
@@ -707,7 +748,7 @@ void MainWindow::stopTest(bool manualStop)
     }
 
     finalizeTestReport();
-    updateStatsView();
+    scheduleStatsRefresh();
 
     ui->pushButtonStart->setEnabled(true);
     ui->pushButtonStop->setEnabled(false);

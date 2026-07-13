@@ -95,6 +95,8 @@ private:
     QList<CommandItem> collectCommands();
     static bool isValidHexChar(QChar c);
     bool validateHexSyntax(const QString &text);
+    void setupStatsLabels();
+    void scheduleStatsRefresh();
 
 private:
     Ui::MainWindow *ui = nullptr;
@@ -105,6 +107,7 @@ private:
     StatisticsManager m_statistics;
     QTimer *m_sendTimer = nullptr;
     QTimer *m_timeoutTimer = nullptr;
+    QTimer *m_statsTimer = nullptr;
     bool m_testRunning = false;
     bool m_finishingAfterLimit = false;
     int m_currentCommandIndex = 0;
