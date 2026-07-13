@@ -79,7 +79,6 @@ void MainWindow::setupUiLogic()
     QObject::connect(ui->pushButtonDisconnect, &QPushButton::clicked, this, &MainWindow::slotDisconnectClicked);
     QObject::connect(ui->pushButtonStart, &QPushButton::clicked, this, &MainWindow::slotStartClicked);
     QObject::connect(ui->pushButtonStop, &QPushButton::clicked, this, &MainWindow::slotStopClicked);
-    QObject::connect(ui->pushButtonSendAll, &QPushButton::clicked, this, &MainWindow::slotSendAllClicked);
     QObject::connect(ui->pushButtonAddCommand, &QPushButton::clicked, this, &MainWindow::slotAddCommandRow);
     QObject::connect(ui->pushButtonRemoveCommand, &QPushButton::clicked, this, &MainWindow::slotRemoveCommandRow);
     QObject::connect(m_sendTimer, &QTimer::timeout, this, &MainWindow::slotSendNextPacket);
@@ -91,15 +90,13 @@ void MainWindow::setupCommandTable()
     QStringList headers;
     headers << QStringLiteral("#")
             << QStringLiteral("Command")
-            << QStringLiteral("ASCII")
-            << QStringLiteral("HEX");
+            << QStringLiteral("Mode");
 
-    ui->tableCommands->setColumnCount(4);
+    ui->tableCommands->setColumnCount(3);
     ui->tableCommands->setHorizontalHeaderLabels(headers);
     ui->tableCommands->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     ui->tableCommands->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     ui->tableCommands->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    ui->tableCommands->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     ui->tableCommands->verticalHeader()->setVisible(false);
     ui->tableCommands->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->tableCommands->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -137,19 +134,6 @@ void MainWindow::slotAddCommandRow()
     modeLayout->addWidget(hexRadio);
     modeLayout->addStretch();
     ui->tableCommands->setCellWidget(row, 2, modeWidget);
-
-    QWidget *sendWidget = new QWidget();
-    QHBoxLayout *sendLayout = new QHBoxLayout(sendWidget);
-    sendLayout->setContentsMargins(4, 0, 4, 0);
-    QPushButton *sendOneBtn = new QPushButton(QStringLiteral("Send"));
-    sendOneBtn->setStyleSheet(QStringLiteral("QPushButton { background: #2a3642; color: white; border-radius: 4px; padding: 4px 12px; }"));
-    QObject::connect(sendOneBtn, &QPushButton::clicked, this, [this]() {
-        QPushButton *btn = qobject_cast<QPushButton *>(sender());
-        if (!btn) return;
-        slotSendAllClicked();
-    });
-    sendLayout->addWidget(sendOneBtn);
-    ui->tableCommands->setCellWidget(row, 3, sendWidget);
 }
 
 void MainWindow::slotRemoveCommandRow()
@@ -290,44 +274,6 @@ QList<CommandItem> MainWindow::collectCommands()
     return commands;
 }
 
-void MainWindow::slotSendAllClicked()
-{
-    if (!m_connected) {
-        appendLog(LogLevel::Error, QStringLiteral("Please connect first"));
-        return;
-    }
-
-    const QList<CommandItem> commands = collectCommands();
-    if (commands.isEmpty()) {
-        appendLog(LogLevel::Error, QStringLiteral("No commands to send"));
-        return;
-    }
-
-    for (const CommandItem &item : commands) {
-        if (!item.valid) {
-            appendLog(LogLevel::Error, QStringLiteral("Invalid command syntax"));
-            return;
-        }
-    }
-
-    for (const CommandItem &item : commands) {
-        QByteArray payload;
-        if (item.hexMode) {
-            const QString hexStr = item.text.simplified().remove(QRegularExpression(QStringLiteral("\\s+")));
-            payload = QByteArray::fromHex(hexStr.toLatin1());
-        } else {
-            payload = item.text.toUtf8();
-        }
-
-        if (payload.isEmpty()) continue;
-
-        PacketInfo packet = m_statistics.recordSend(payload);
-        appendLog(LogLevel::Tx, QStringLiteral("[SendAll] #%1 %2").arg(packet.id).arg(item.text));
-        QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
-    }
-    scheduleStatsRefresh();
-}
-
 void MainWindow::applyIndustrialTheme()
 {
     setWindowTitle(QStringLiteral("CommBench Pro - Industrial Communication Benchmark"));
@@ -412,7 +358,6 @@ void MainWindow::slotStartClicked()
     ui->pushButtonStop->setEnabled(true);
     ui->pushButtonConnect->setEnabled(false);
     ui->comboBoxMode->setEnabled(false);
-    ui->pushButtonSendAll->setEnabled(false);
     m_timeoutTimer->start();
 
     appendLog(LogLevel::Info, QStringLiteral("Test started: %1, interval %2 ms, count %3, %4 commands")
@@ -797,7 +742,6 @@ void MainWindow::stopTest(bool manualStop)
     ui->pushButtonStop->setEnabled(false);
     ui->pushButtonConnect->setEnabled(true);
     ui->comboBoxMode->setEnabled(true);
-    ui->pushButtonSendAll->setEnabled(true);
 }
 
 void MainWindow::finalizeTestReport()

@@ -13,7 +13,6 @@
 #include <QThread>
 #include <QTimer>
 #include <QVector>
-#include <QPushButton>
 #include <QRadioButton>
 #include <QWidget>
 
@@ -59,7 +58,6 @@ private Q_SLOTS:
     void slotRemoveCommandRow();
     void slotCommandTextChanged();
     void slotHexModeToggled();
-    void slotSendAllClicked();
 
 private:
     enum class ConnectionState {
