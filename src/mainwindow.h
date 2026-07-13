@@ -112,6 +112,7 @@ private:
     bool m_finishingAfterLimit = false;
     int m_currentCommandIndex = 0;
     int m_totalCommands = 0;
+    QVector<int> m_perCommandSendCount;
 };
 
 END_NAMESPACE_CIQTEK

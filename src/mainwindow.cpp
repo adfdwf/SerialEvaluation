@@ -400,6 +400,7 @@ void MainWindow::slotStartClicked()
 
     m_currentCommandIndex = 0;
     m_totalCommands = commands.size();
+    m_perCommandSendCount = QVector<int>(commands.size(), 0);
 
     ui->textEditLog->clear();
     m_statistics.reset();
@@ -441,13 +442,7 @@ void MainWindow::slotSendNextPacket()
     const int intervalMs = ui->spinBoxInterval->value();
     m_sendTimer->setInterval(intervalMs);
 
-    const int targetCount = ui->spinBoxSendCount->value();
-    if (targetCount > 0 && m_statistics.snapshot().totalSent >= static_cast<quint64>(targetCount)) {
-        m_sendTimer->stop();
-        m_finishingAfterLimit = true;
-        checkFinishAfterLimit();
-        return;
-    }
+    const int targetPerCommand = ui->spinBoxSendCount->value();
 
     const QList<CommandItem> commands = collectCommands();
     if (commands.isEmpty()) {
@@ -456,13 +451,40 @@ void MainWindow::slotSendNextPacket()
         return;
     }
 
-    if (m_currentCommandIndex >= m_totalCommands) {
-        m_currentCommandIndex = 0;
-        m_totalCommands = commands.size();
+    // 确保 m_perCommandSendCount 与当前命令表同步
+    if (m_perCommandSendCount.size() != commands.size()) {
+        m_perCommandSendCount = QVector<int>(commands.size(), 0);
+        if (m_currentCommandIndex >= commands.size()) {
+            m_currentCommandIndex = 0;
+        }
+    }
+
+    // 查找下一条未达到发送次数上限的命令
+    int checked = 0;
+    while (checked < commands.size()) {
+        if (m_currentCommandIndex >= commands.size()) {
+            m_currentCommandIndex = 0;
+        }
+
+        if (targetPerCommand > 0 && m_perCommandSendCount[m_currentCommandIndex] >= targetPerCommand) {
+            m_currentCommandIndex = (m_currentCommandIndex + 1) % commands.size();
+            ++checked;
+            continue;
+        }
+
+        break;
+    }
+
+    if (checked >= commands.size()) {
+        // 所有命令都已达到发送次数上限
+        m_sendTimer->stop();
+        m_finishingAfterLimit = true;
+        appendLog(LogLevel::Info, QStringLiteral("All commands reached send limit, waiting for remaining responses or timeout"));
+        checkFinishAfterLimit();
+        return;
     }
 
     const CommandItem &item = commands.at(m_currentCommandIndex);
-    m_currentCommandIndex = (m_currentCommandIndex + 1) % commands.size();
 
     QByteArray payload;
     if (item.hexMode) {
@@ -474,20 +496,18 @@ void MainWindow::slotSendNextPacket()
 
     if (payload.isEmpty()) {
         // payload 为空时跳过本条命令，继续下一条，不中断定时器
+        m_currentCommandIndex = (m_currentCommandIndex + 1) % commands.size();
         return;
     }
 
     const PacketInfo packet = m_statistics.recordSend(payload);
+    ++m_perCommandSendCount[m_currentCommandIndex];
     appendLog(LogLevel::Tx, QStringLiteral("#%1 %2").arg(packet.id).arg(item.text));
     QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
     scheduleStatsRefresh();
 
-    if (targetCount > 0 && packet.id >= static_cast<quint64>(targetCount)) {
-        m_sendTimer->stop();
-        m_finishingAfterLimit = true;
-        appendLog(LogLevel::Info, QStringLiteral("Reached send limit, waiting for remaining responses or timeout"));
-        checkFinishAfterLimit();
-    }
+    // 移到下一条命令，下次 timer 触发时发送
+    m_currentCommandIndex = (m_currentCommandIndex + 1) % commands.size();
 }
 
 void MainWindow::slotCheckTimeouts()
