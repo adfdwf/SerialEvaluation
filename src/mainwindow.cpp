@@ -1,4 +1,3 @@
-
 #include "mainwindow.h"
 #include "serialclientworker.h"
 #include "tcpclientworker.h"
@@ -7,42 +6,18 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
-#include <QLabel>
+#include <QHBoxLayout>
+#include <QHeaderView>
 #include <QMetaObject>
 #include <QScrollBar>
 #include <QSerialPortInfo>
-#include <QSpinBox>
+#include <QTableWidget>
+#include <QRadioButton>
 #include <QTextStream>
-
-namespace {
-
-constexpr int kDefaultTcpFrameLength = 9;
-
-QSpinBox *tcpFrameLengthSpinBox(Ui::MainWindow *ui)
-{
-    if (auto *spinBox = ui->centralwidget->findChild<QSpinBox *>(QStringLiteral("spinBoxTcpFrameLength"))) {
-        return spinBox;
-    }
-
-    auto *label = new QLabel(QStringLiteral("Response bytes"), ui->widgetTcpConfig);
-    label->setObjectName(QStringLiteral("labelTcpFrameLength"));
-    ui->horizontalLayoutTcp->addWidget(label);
-
-    auto *spinBox = new QSpinBox(ui->widgetTcpConfig);
-    spinBox->setObjectName(QStringLiteral("spinBoxTcpFrameLength"));
-    ui->horizontalLayoutTcp->addWidget(spinBox);
-    return spinBox;
-}
-
-} // namespace
+#include <QVBoxLayout>
 
 BEGIN_NAMESPACE_CIQTEK
 
-/**
- * @brief  MainWindow default constructor
- * @param  parent Qt parent object
- * @return void
- */
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow)
 {
@@ -55,10 +30,6 @@ MainWindow::MainWindow(QWidget *parent)
     updateStatsView();
 }
 
-/**
- * @brief  MainWindow default destructor
- * @return void
- */
 MainWindow::~MainWindow()
 {
     stopTest(true);
@@ -66,10 +37,6 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-/**
- * @brief  setupUiLogic initializes UI business logic
- * @return void
- */
 void MainWindow::setupUiLogic()
 {
     m_sendTimer = new QTimer(this);
@@ -78,9 +45,6 @@ void MainWindow::setupUiLogic()
 
     ui->spinBoxPort->setRange(1, 65535);
     ui->spinBoxPort->setValue(10160);
-    auto *tcpFrameLength = tcpFrameLengthSpinBox(ui);
-    tcpFrameLength->setRange(1, 65535);
-    tcpFrameLength->setValue(kDefaultTcpFrameLength);
     ui->spinBoxInterval->setRange(1, 600000);
     ui->spinBoxInterval->setValue(1000);
     ui->spinBoxSendCount->setRange(0, 100000000);
@@ -88,7 +52,6 @@ void MainWindow::setupUiLogic()
     ui->spinBoxTimeout->setRange(100, 600000);
     ui->spinBoxTimeout->setValue(300);
 
-    ui->comboBoxPayloadMode->addItems({QStringLiteral("ASCII"), QStringLiteral("HEX")});
     ui->comboBoxMode->addItems({QStringLiteral("TCP Network"), QStringLiteral("Serial Port")});
     ui->comboBoxBaudRate->addItems({QStringLiteral("9600"), QStringLiteral("19200"), QStringLiteral("38400"), QStringLiteral("57600"), QStringLiteral("115200"), QStringLiteral("230400"), QStringLiteral("460800"), QStringLiteral("921600")});
     ui->comboBoxBaudRate->setCurrentText(QStringLiteral("115200"));
@@ -98,7 +61,9 @@ void MainWindow::setupUiLogic()
     ui->comboBoxParity->addItems({QStringLiteral("None"), QStringLiteral("Even"), QStringLiteral("Odd"), QStringLiteral("Mark"), QStringLiteral("Space")});
 
     ui->lineEditIp->setText(QStringLiteral("172.16.32.231"));
-    ui->lineEditCommand->setText(QStringLiteral("A0 81 01 00 00 00 00 00 22"));
+
+    setupCommandTable();
+
     ui->pushButtonStop->setEnabled(false);
 
     QObject::connect(ui->comboBoxMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::slotModeChanged);
@@ -107,43 +72,261 @@ void MainWindow::setupUiLogic()
     QObject::connect(ui->pushButtonDisconnect, &QPushButton::clicked, this, &MainWindow::slotDisconnectClicked);
     QObject::connect(ui->pushButtonStart, &QPushButton::clicked, this, &MainWindow::slotStartClicked);
     QObject::connect(ui->pushButtonStop, &QPushButton::clicked, this, &MainWindow::slotStopClicked);
+    QObject::connect(ui->pushButtonSendAll, &QPushButton::clicked, this, &MainWindow::slotSendAllClicked);
+    QObject::connect(ui->pushButtonAddCommand, &QPushButton::clicked, this, &MainWindow::slotAddCommandRow);
+    QObject::connect(ui->pushButtonRemoveCommand, &QPushButton::clicked, this, &MainWindow::slotRemoveCommandRow);
     QObject::connect(m_sendTimer, &QTimer::timeout, this, &MainWindow::slotSendNextPacket);
     QObject::connect(m_timeoutTimer, &QTimer::timeout, this, &MainWindow::slotCheckTimeouts);
 }
 
-/**
- * @brief  applyIndustrialTheme applies the industrial UI theme
- * @return void
- */
+void MainWindow::setupCommandTable()
+{
+    QStringList headers;
+    headers << QStringLiteral("#")
+            << QStringLiteral("Command")
+            << QStringLiteral("ASCII")
+            << QStringLiteral("HEX");
+
+    ui->tableCommands->setColumnCount(4);
+    ui->tableCommands->setHorizontalHeaderLabels(headers);
+    ui->tableCommands->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    ui->tableCommands->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    ui->tableCommands->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    ui->tableCommands->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    ui->tableCommands->verticalHeader()->setVisible(false);
+    ui->tableCommands->setSelectionBehavior(QAbstractItemView::SelectRows);
+    ui->tableCommands->setSelectionMode(QAbstractItemView::SingleSelection);
+
+    slotAddCommandRow();
+}
+
+void MainWindow::slotAddCommandRow()
+{
+    const int row = ui->tableCommands->rowCount();
+    ui->tableCommands->insertRow(row);
+
+    QTableWidgetItem *numItem = new QTableWidgetItem(QString::number(row + 1));
+    numItem->setFlags(numItem->flags() & ~Qt::ItemIsEditable);
+    numItem->setTextAlignment(Qt::AlignCenter);
+    ui->tableCommands->setItem(row, 0, numItem);
+
+    QLineEdit *commandEdit = new QLineEdit();
+    commandEdit->setPlaceholderText(QStringLiteral("A0 81 01 00 00 00 00 00 22"));
+    commandEdit->setStyleSheet(QStringLiteral("background: #ffffff; color: #000000; border: 1px solid #cccccc; border-radius: 4px; padding: 4px;"));
+    QObject::connect(commandEdit, &QLineEdit::textChanged, this, &MainWindow::slotCommandTextChanged);
+    ui->tableCommands->setCellWidget(row, 1, commandEdit);
+
+    QRadioButton *asciiRadio = new QRadioButton(QStringLiteral("ASCII"));
+    asciiRadio->setChecked(true);
+    QRadioButton *hexRadio = new QRadioButton(QStringLiteral("HEX"));
+    QObject::connect(asciiRadio, &QRadioButton::toggled, this, &MainWindow::slotHexModeToggled);
+    QObject::connect(hexRadio, &QRadioButton::toggled, this, &MainWindow::slotHexModeToggled);
+
+    QWidget *modeWidget = new QWidget();
+    QHBoxLayout *modeLayout = new QHBoxLayout(modeWidget);
+    modeLayout->setContentsMargins(4, 0, 4, 0);
+    modeLayout->setSpacing(4);
+    modeLayout->addWidget(asciiRadio);
+    modeLayout->addWidget(hexRadio);
+    modeLayout->addStretch();
+    ui->tableCommands->setCellWidget(row, 2, modeWidget);
+
+    QWidget *sendWidget = new QWidget();
+    QHBoxLayout *sendLayout = new QHBoxLayout(sendWidget);
+    sendLayout->setContentsMargins(4, 0, 4, 0);
+    QPushButton *sendOneBtn = new QPushButton(QStringLiteral("Send"));
+    sendOneBtn->setStyleSheet(QStringLiteral("QPushButton { background: #2a3642; color: white; border-radius: 4px; padding: 4px 12px; }"));
+    QObject::connect(sendOneBtn, &QPushButton::clicked, this, [this]() {
+        QPushButton *btn = qobject_cast<QPushButton *>(sender());
+        if (!btn) return;
+        slotSendAllClicked();
+    });
+    sendLayout->addWidget(sendOneBtn);
+    ui->tableCommands->setCellWidget(row, 3, sendWidget);
+}
+
+void MainWindow::slotRemoveCommandRow()
+{
+    const int row = ui->tableCommands->currentRow();
+    if (row < 0) {
+        if (ui->tableCommands->rowCount() > 1) {
+            ui->tableCommands->removeRow(ui->tableCommands->rowCount() - 1);
+        }
+        return;
+    }
+    if (ui->tableCommands->rowCount() <= 1) {
+        return;
+    }
+    ui->tableCommands->removeRow(row);
+    for (int i = row; i < ui->tableCommands->rowCount(); ++i) {
+        QTableWidgetItem *numItem = ui->tableCommands->item(i, 0);
+        if (numItem) {
+            numItem->setText(QString::number(i + 1));
+        }
+    }
+}
+
+void MainWindow::slotCommandTextChanged()
+{
+    QLineEdit *edit = qobject_cast<QLineEdit *>(sender());
+    if (!edit) return;
+
+    for (int row = 0; row < ui->tableCommands->rowCount(); ++row) {
+        if (ui->tableCommands->cellWidget(row, 1) == edit) {
+            const QString text = edit->text();
+            QWidget *modeWidget = ui->tableCommands->cellWidget(row, 2);
+            if (!modeWidget) break;
+            QRadioButton *hexRadio = modeWidget->findChild<QRadioButton *>(QString(), Qt::FindChildrenRecursively);
+            if (!hexRadio) break;
+
+            QRadioButton *asciiRadio = nullptr;
+            for (auto *rb : modeWidget->findChildren<QRadioButton *>()) {
+                if (rb->text() == QStringLiteral("ASCII")) {
+                    asciiRadio = rb;
+                }
+            }
+
+            bool hexMode = hexRadio && hexRadio->isChecked();
+            bool valid = true;
+
+            if (hexMode) {
+                valid = validateHexSyntax(text);
+            }
+
+            if (valid) {
+                edit->setStyleSheet(QStringLiteral("background: #ffffff; color: #000000; border: 1px solid #cccccc; border-radius: 4px; padding: 4px;"));
+            } else {
+                edit->setStyleSheet(QStringLiteral("background: #ffe0e0; color: #cc0000; border: 1px solid #ff6666; border-radius: 4px; padding: 4px;"));
+            }
+            break;
+        }
+    }
+}
+
+void MainWindow::slotHexModeToggled()
+{
+    QRadioButton *rb = qobject_cast<QRadioButton *>(sender());
+    if (!rb) return;
+    for (int row = 0; row < ui->tableCommands->rowCount(); ++row) {
+        QWidget *modeWidget = ui->tableCommands->cellWidget(row, 2);
+        if (!modeWidget) continue;
+        for (auto *foundRb : modeWidget->findChildren<QRadioButton *>()) {
+            if (foundRb == rb || foundRb->parentWidget() == modeWidget) {
+                QLineEdit *edit = qobject_cast<QLineEdit *>(ui->tableCommands->cellWidget(row, 1));
+                if (edit) {
+                    slotCommandTextChanged();
+                }
+                return;
+            }
+        }
+    }
+}
+
+bool MainWindow::validateHexSyntax(const QString &text)
+{
+    if (text.trimmed().isEmpty()) {
+        return true;
+    }
+    const QStringList parts = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) {
+        return true;
+    }
+    for (const QString &part : parts) {
+        if (part.length() % 2 != 0) {
+            return false;
+        }
+        for (const QChar &c : part) {
+            if (!isValidHexChar(c)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool MainWindow::isValidHexChar(QChar c)
+{
+    return (c >= QLatin1Char('0') && c <= QLatin1Char('9')) ||
+           (c >= QLatin1Char('a') && c <= QLatin1Char('f')) ||
+           (c >= QLatin1Char('A') && c <= QLatin1Char('F'));
+}
+
+QList<CommandItem> MainWindow::collectCommands()
+{
+    QList<CommandItem> commands;
+    for (int row = 0; row < ui->tableCommands->rowCount(); ++row) {
+        QLineEdit *edit = qobject_cast<QLineEdit *>(ui->tableCommands->cellWidget(row, 1));
+        if (!edit || edit->text().trimmed().isEmpty()) continue;
+
+        QWidget *modeWidget = ui->tableCommands->cellWidget(row, 2);
+        if (!modeWidget) continue;
+
+        bool hexMode = false;
+        for (auto *rb : modeWidget->findChildren<QRadioButton *>()) {
+            if (rb->isChecked() && rb->text() == QStringLiteral("HEX")) {
+                hexMode = true;
+                break;
+            }
+        }
+
+        bool valid = true;
+        if (hexMode) {
+            valid = validateHexSyntax(edit->text());
+        }
+
+        CommandItem item;
+        item.text = edit->text();
+        item.hexMode = hexMode;
+        item.valid = valid;
+        commands.append(item);
+    }
+    return commands;
+}
+
+void MainWindow::slotSendAllClicked()
+{
+    if (!m_connected) {
+        appendLog(LogLevel::Error, QStringLiteral("Please connect first"));
+        return;
+    }
+
+    const QList<CommandItem> commands = collectCommands();
+    if (commands.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("No commands to send"));
+        return;
+    }
+
+    for (const CommandItem &item : commands) {
+        if (!item.valid) {
+            appendLog(LogLevel::Error, QStringLiteral("Invalid command syntax"));
+            return;
+        }
+    }
+
+    for (const CommandItem &item : commands) {
+        QByteArray payload;
+        if (item.hexMode) {
+            const QString hexStr = item.text.simplified().remove(QRegularExpression(QStringLiteral("\\s+")));
+            payload = QByteArray::fromHex(hexStr.toLatin1());
+        } else {
+            payload = item.text.toUtf8();
+        }
+
+        if (payload.isEmpty()) continue;
+
+        PacketInfo packet = m_statistics.recordSend(payload);
+        appendLog(LogLevel::Tx, QStringLiteral("[SendAll] #%1 %2").arg(packet.id).arg(item.text));
+        QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+    }
+    updateStatsView();
+}
+
 void MainWindow::applyIndustrialTheme()
 {
     setWindowTitle(QStringLiteral("CommBench Pro - Industrial Communication Benchmark"));
     resize(1280, 780);
-
-    setStyleSheet(QStringLiteral(R"(
-        QMainWindow { background: #151a1f; }
-        QWidget { color: #d9e2ec; font-family: "Microsoft YaHei", "Segoe UI"; font-size: 10pt; }
-        QGroupBox { border: 1px solid #36424f; border-radius: 8px; margin-top: 12px; padding: 12px; background: #1d242c; font-weight: 600; }
-        QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #9fb3c8; }
-        QLineEdit, QSpinBox, QComboBox, QTextEdit { background: #0f1419; border: 1px solid #3d4b59; border-radius: 6px; padding: 6px; selection-background-color: #2f80ed; }
-        QTextEdit { font-family: "Cascadia Mono", "Consolas", monospace; }
-        QPushButton { background: #2a3642; border: 1px solid #4b5f73; border-radius: 7px; padding: 8px 14px; font-weight: 600; }
-        QPushButton:hover { background: #344457; }
-        QPushButton:pressed { background: #1f8f63; }
-        QPushButton:disabled { color: #697886; background: #202830; border-color: #2d3844; }
-        QPushButton#pushButtonStart { background: #0f8a5f; border-color: #19b982; color: white; }
-        QPushButton#pushButtonStop { background: #a23b3b; border-color: #d05a5a; color: white; }
-        QLabel#labelTotalSentValue, QLabel#labelSuccessValue, QLabel#labelLostValue, QLabel#labelRateValue,
-        QLabel#labelAverageValue, QLabel#labelMaxValue, QLabel#labelMinValue { font-size: 18pt; font-weight: 800; color: #f8fafc; }
-        QFrame#frameLed { border-radius: 8px; min-width: 16px; min-height: 16px; max-width: 16px; max-height: 16px; }
-    )"));
 }
 
-/**
- * @brief  slotModeChanged handles communication mode changes
- * @param  index Current mode index
- * @return void
- */
 void MainWindow::slotModeChanged(int index)
 {
     const bool serialMode = index == 1;
@@ -153,10 +336,6 @@ void MainWindow::slotModeChanged(int index)
     setConnectionState(ConnectionState::Disconnected);
 }
 
-/**
- * @brief  slotRefreshSerialPorts refreshes the serial port list
- * @return void
- */
 void MainWindow::slotRefreshSerialPorts()
 {
     const QString previous = ui->comboBoxSerialPort->currentText();
@@ -173,10 +352,6 @@ void MainWindow::slotRefreshSerialPorts()
     }
 }
 
-/**
- * @brief  slotConnectClicked handles the connect button
- * @return void
- */
 void MainWindow::slotConnectClicked()
 {
     destroyWorker();
@@ -186,38 +361,40 @@ void MainWindow::slotConnectClicked()
     }
 
     setConnectionState(ConnectionState::Connecting);
-    appendLog(LogLevel::Info, QStringLiteral("正在连接：%1").arg(currentConfigDescription()));
+    appendLog(LogLevel::Info, QStringLiteral("Connecting: %1").arg(currentConfigDescription()));
     QMetaObject::invokeMethod(m_workerObject, "connect", Qt::QueuedConnection);
 }
 
-/**
- * @brief  slotDisconnectClicked handles the disconnect button
- * @return void
- */
 void MainWindow::slotDisconnectClicked()
 {
     stopTest(true);
     destroyWorker();
     setConnectionState(ConnectionState::Disconnected);
-    appendLog(LogLevel::Info, QStringLiteral("连接已断开"));
+    appendLog(LogLevel::Info, QStringLiteral("Connection closed"));
 }
 
-/**
- * @brief  slotStartClicked starts the benchmark test
- * @return void
- */
 void MainWindow::slotStartClicked()
 {
     if (!m_connected) {
-        appendLog(LogLevel::Error, QStringLiteral("请先建立连接后再开始测试"));
+        appendLog(LogLevel::Error, QStringLiteral("Please connect first"));
         return;
     }
 
-    const QByteArray payload = buildPayload();
-    if (payload.isEmpty()) {
-        appendLog(LogLevel::Error, QStringLiteral("发送指令为空或 HEX 格式无效"));
+    const QList<CommandItem> commands = collectCommands();
+    if (commands.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("No valid commands"));
         return;
     }
+
+    for (const CommandItem &item : commands) {
+        if (!item.valid) {
+            appendLog(LogLevel::Error, QStringLiteral("Invalid command syntax, please fix highlighted cells"));
+            return;
+        }
+    }
+
+    m_currentCommandIndex = 0;
+    m_totalCommands = commands.size();
 
     ui->textEditLog->clear();
     m_statistics.reset();
@@ -227,37 +404,37 @@ void MainWindow::slotStartClicked()
     ui->pushButtonStop->setEnabled(true);
     ui->pushButtonConnect->setEnabled(false);
     ui->comboBoxMode->setEnabled(false);
-    m_sendTimer->setInterval(ui->spinBoxInterval->value());
+    ui->pushButtonSendAll->setEnabled(false);
     m_timeoutTimer->start();
 
-    appendLog(LogLevel::Info, QStringLiteral("测试开始：%1，间隔 %2 ms，次数 %3")
+    appendLog(LogLevel::Info, QStringLiteral("Test started: %1, interval %2 ms, count %3, %4 commands")
                                  .arg(currentModeDescription())
                                  .arg(ui->spinBoxInterval->value())
-                                 .arg(ui->spinBoxSendCount->value() == 0 ? QStringLiteral("无限") : QString::number(ui->spinBoxSendCount->value())));
+                                 .arg(ui->spinBoxSendCount->value() == 0 ? QStringLiteral("unlimited") : QString::number(ui->spinBoxSendCount->value()))
+                                 .arg(commands.size()));
+
+    // ��������ʱ��ǰ���� Interval��ȷ��ʵʱ��Ч
+    m_sendTimer->setInterval(ui->spinBoxInterval->value());
     slotSendNextPacket();
     if (m_testRunning && !m_finishingAfterLimit) {
         m_sendTimer->start();
     }
 }
 
-/**
- * @brief  slotStopClicked stops the benchmark test
- * @return void
- */
 void MainWindow::slotStopClicked()
 {
     stopTest(true);
 }
 
-/**
- * @brief  slotSendNextPacket sends the next packet on timer
- * @return void
- */
 void MainWindow::slotSendNextPacket()
 {
     if (!m_testRunning || !m_workerObject) {
         return;
     }
+
+    // ÿ�η���ǰ���¶�ȡ Interval��ȷ���û���̬����ʵʱ��Ч
+    const int intervalMs = ui->spinBoxInterval->value();
+    m_sendTimer->setInterval(intervalMs);
 
     const int targetCount = ui->spinBoxSendCount->value();
     if (targetCount > 0 && m_statistics.snapshot().totalSent >= static_cast<quint64>(targetCount)) {
@@ -267,39 +444,57 @@ void MainWindow::slotSendNextPacket()
         return;
     }
 
-    const QByteArray payload = buildPayload();
-    if (payload.isEmpty()) {
-        appendLog(LogLevel::Error, QStringLiteral("发送指令为空或 HEX 格式无效，测试终止"));
+    const QList<CommandItem> commands = collectCommands();
+    if (commands.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("No commands, test stopped"));
         stopTest(true);
         return;
     }
 
+    if (m_currentCommandIndex >= m_totalCommands) {
+        m_currentCommandIndex = 0;
+        m_totalCommands = commands.size();
+    }
+
+    const CommandItem &item = commands.at(m_currentCommandIndex);
+    m_currentCommandIndex = (m_currentCommandIndex + 1) % commands.size();
+
+    QByteArray payload;
+    if (item.hexMode) {
+        const QString hexStr = item.text.simplified().remove(QRegularExpression(QStringLiteral("\\s+")));
+        payload = QByteArray::fromHex(hexStr.toLatin1());
+    } else {
+        payload = item.text.toUtf8();
+    }
+
+    if (payload.isEmpty()) {
+        // payload Ϊ��ʱ�����������������һ�������ж϶�ʱ��
+        return;
+    }
+
     const PacketInfo packet = m_statistics.recordSend(payload);
-    appendLog(LogLevel::Tx, QStringLiteral("#%1 %2").arg(packet.id).arg(payloadToDisplay(payload)));
+    appendLog(LogLevel::Tx, QStringLiteral("#%1 %2").arg(packet.id).arg(item.text));
     QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
     updateStatsView();
 
     if (targetCount > 0 && packet.id >= static_cast<quint64>(targetCount)) {
         m_sendTimer->stop();
         m_finishingAfterLimit = true;
-        appendLog(LogLevel::Info, QStringLiteral("已达到发送次数，等待剩余回包或超时"));
+        appendLog(LogLevel::Info, QStringLiteral("Reached send limit, waiting for remaining responses or timeout"));
         checkFinishAfterLimit();
     }
 }
 
-/**
- * @brief  slotCheckTimeouts checks pending packets for timeout
- * @return void
- */
 void MainWindow::slotCheckTimeouts()
 {
     if (!m_testRunning) {
         return;
     }
 
-    const QVector<PacketInfo> timedOut = m_statistics.markTimeouts(ui->spinBoxTimeout->value());
+    const qint64 timeoutMs = ui->spinBoxTimeout->value();
+    const QVector<PacketInfo> timedOut = m_statistics.markTimeouts(timeoutMs);
     for (const PacketInfo &packet : timedOut) {
-        appendLog(LogLevel::Error, QStringLiteral("#%1 超时/丢包").arg(packet.id), packet.elapsedMs);
+        appendLog(LogLevel::Error, QStringLiteral("#%1 timeout/lost").arg(packet.id), packet.elapsedMs);
     }
     if (!timedOut.isEmpty()) {
         updateStatsView();
@@ -307,21 +502,13 @@ void MainWindow::slotCheckTimeouts()
     checkFinishAfterLimit();
 }
 
-/**
- * @brief  slotWorkerConnected handles worker connected signal
- * @return void
- */
 void MainWindow::slotWorkerConnected()
 {
     m_connected = true;
     setConnectionState(ConnectionState::Connected);
-    appendLog(LogLevel::Info, QStringLiteral("连接成功"));
+    appendLog(LogLevel::Info, QStringLiteral("Connected"));
 }
 
-/**
- * @brief  slotWorkerDisconnected handles worker disconnected signal
- * @return void
- */
 void MainWindow::slotWorkerDisconnected()
 {
     m_connected = false;
@@ -329,41 +516,26 @@ void MainWindow::slotWorkerDisconnected()
         stopTest(true);
     }
     setConnectionState(ConnectionState::Disconnected);
-    appendLog(LogLevel::Info, QStringLiteral("远端已断开连接"));
+    appendLog(LogLevel::Info, QStringLiteral("Remote closed connection"));
 }
 
-/**
- * @brief  slotWorkerDataReceived handles data received from worker
- * @param  data Received bytes
- * @return void
- */
 void MainWindow::slotWorkerDataReceived(const QByteArray &data)
 {
     PacketInfo packet;
     if (m_statistics.recordReceive(data, &packet)) {
         appendLog(LogLevel::Rx, QStringLiteral("#%1 %2").arg(packet.id).arg(payloadToDisplay(data)), packet.elapsedMs);
     } else {
-        appendLog(LogLevel::Rx, QStringLiteral("未匹配回包 %1").arg(payloadToDisplay(data)));
+        appendLog(LogLevel::Rx, QStringLiteral("Unmatched response %1").arg(payloadToDisplay(data)));
     }
     updateStatsView();
     checkFinishAfterLimit();
 }
 
-/**
- * @brief  slotWorkerError handles worker error message
- * @param  message Error text
- * @return void
- */
 void MainWindow::slotWorkerError(const QString &message)
 {
     appendLog(LogLevel::Error, message);
 }
 
-/**
- * @brief  setConnectionState updates connection state and UI
- * @param  state New connection state
- * @return void
- */
 void MainWindow::setConnectionState(ConnectionState state)
 {
     QString text;
@@ -391,27 +563,27 @@ void MainWindow::setConnectionState(ConnectionState state)
         break;
     }
 
-    ui->labelConnectionState->setText(text);
-    ui->frameLed->setStyleSheet(QStringLiteral("background:%1; border:1px solid rgba(255,255,255,0.35); border-radius:8px;").arg(color));
+    QLabel *stateLabel = ui->labelConnectionState;
+    if (stateLabel) {
+        stateLabel->setText(text);
+    }
+    QFrame *led = ui->frameLed;
+    if (led) {
+        led->setStyleSheet(QStringLiteral("background:%1; border:1px solid rgba(255,255,255,0.35); border-radius:8px;").arg(color));
+    }
 }
 
-/**
- * @brief  createWorker creates communication worker for current mode
- * @return void
- */
 void MainWindow::createWorker()
 {
     m_commThread = new QThread(this);
 
     if (ui->comboBoxMode->currentIndex() == 0) {
-        auto *worker = new TcpClientWorker(ui->lineEditIp->text().trimmed(),
-                                           static_cast<quint16>(ui->spinBoxPort->value()),
-                                           tcpFrameLengthSpinBox(ui)->value());
+        auto *worker = new TcpClientWorker(ui->lineEditIp->text().trimmed(), static_cast<quint16>(ui->spinBoxPort->value()));
         m_workerObject = worker;
         m_commInterface = worker;
     } else {
         if (ui->comboBoxSerialPort->currentText().isEmpty()) {
-            appendLog(LogLevel::Error, QStringLiteral("没有可用串口，请刷新后重试"));
+            appendLog(LogLevel::Error, QStringLiteral("No serial port available, refresh and retry"));
             delete m_commThread;
             m_commThread = nullptr;
             return;
@@ -433,7 +605,7 @@ void MainWindow::createWorker()
         m_workerObject = worker;
         m_commInterface = worker;
     }
-    // Move the worker to the communication thread so queued I/O runs off the UI thread.
+
     m_workerObject->moveToThread(m_commThread);
     QObject::connect(m_commThread, &QThread::finished, m_workerObject, &QObject::deleteLater);
     QObject::connect(m_workerObject, SIGNAL(signalConnected()), this, SLOT(slotWorkerConnected()));
@@ -443,10 +615,6 @@ void MainWindow::createWorker()
     m_commThread->start();
 }
 
-/**
- * @brief  destroyWorker releases communication worker and thread
- * @return void
- */
 void MainWindow::destroyWorker()
 {
     if (!m_commThread) {
@@ -468,10 +636,6 @@ void MainWindow::destroyWorker()
     m_connected = false;
 }
 
-/**
- * @brief  updateStatsView refreshes statistic labels
- * @return void
- */
 void MainWindow::updateStatsView()
 {
     const StatisticsSnapshot snap = m_statistics.snapshot();
@@ -484,13 +648,6 @@ void MainWindow::updateStatsView()
     ui->labelMinValue->setText(QStringLiteral("%1 ms").arg(snap.minElapsedMs));
 }
 
-/**
- * @brief  appendLog appends one log entry to the log view
- * @param  level Log level
- * @param  text Log text
- * @param  elapsedMs Optional elapsed time in milliseconds
- * @return void
- */
 void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs)
 {
     QString tag;
@@ -509,23 +666,27 @@ void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs
         color = QStringLiteral("#ff6b6b");
         break;
     case LogLevel::Info:
-        tag = QStringLiteral("INFO");
-        color = QStringLiteral("#d7a72f");
+        tag = QStringLiteral("INF");
+        color = QStringLiteral("#c0c8d0");
         break;
     }
 
-    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
-    const QString elapsed = elapsedMs >= 0 ? QStringLiteral(" [耗时: %1 ms]").arg(elapsedMs) : QString();
-    ui->textEditLog->append(QStringLiteral("<span style='color:#7b8794'>[%1]</span> <span style='color:%2'>[%3]</span> %4%5")
-                                .arg(timestamp, color, tag, htmlEscape(text), elapsed));
-    ui->textEditLog->verticalScrollBar()->setValue(ui->textEditLog->verticalScrollBar()->maximum());
+    QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
+    QString elapsed;
+    if (elapsedMs >= 0) {
+        elapsed = QStringLiteral(" (%1 ms)").arg(elapsedMs);
+    }
+
+    QString html = QStringLiteral("<span style='color:%1;'><b>[%2]</b> %3%4 %5</span>")
+                       .arg(color, tag, timestamp, elapsed, htmlEscape(text));
+
+    ui->textEditLog->append(html);
+    QScrollBar *scrollBar = ui->textEditLog->verticalScrollBar();
+    if (scrollBar) {
+        scrollBar->setValue(scrollBar->maximum());
+    }
 }
 
-/**
- * @brief  stopTest stops current test workflow
- * @param  manualStop True when stopped by user
- * @return void
- */
 void MainWindow::stopTest(bool manualStop)
 {
     if (!m_testRunning) {
@@ -535,83 +696,85 @@ void MainWindow::stopTest(bool manualStop)
     m_sendTimer->stop();
     m_timeoutTimer->stop();
     m_testRunning = false;
-    m_finishingAfterLimit = false;
 
     if (manualStop) {
-        const QVector<PacketInfo> lost = m_statistics.markAllPendingLost();
-        for (const PacketInfo &packet : lost) {
-            appendLog(LogLevel::Error, QStringLiteral("#%1 手动停止，标记为丢包").arg(packet.id));
-        }
+        appendLog(LogLevel::Info, QStringLiteral("Test stopped manually"));
     }
 
-    updateStatsView();
+    QVector<PacketInfo> lost = m_statistics.markAllPendingLost();
+    for (const PacketInfo &packet : lost) {
+        appendLog(LogLevel::Error, QStringLiteral("#%1 lost").arg(packet.id));
+    }
+
     finalizeTestReport();
+    updateStatsView();
+
     ui->pushButtonStart->setEnabled(true);
     ui->pushButtonStop->setEnabled(false);
-    ui->pushButtonConnect->setEnabled(!m_connected);
+    ui->pushButtonConnect->setEnabled(true);
     ui->comboBoxMode->setEnabled(true);
-    appendLog(LogLevel::Info, QStringLiteral("测试结束"));
+    ui->pushButtonSendAll->setEnabled(true);
 }
 
-/**
- * @brief  finalizeTestReport writes the test report file
- * @return void
- */
 void MainWindow::finalizeTestReport()
 {
-    const QString fileName = QStringLiteral("CommReport_%1.txt").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+    const QString fileName = QStringLiteral("CommReport_%1.txt")
+                                 .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
     QDir logDir(QDir::current().filePath(QStringLiteral("Log")));
     if (!logDir.exists() && !logDir.mkpath(QStringLiteral("."))) {
-        appendLog(LogLevel::Error, QStringLiteral("日志目录创建失败：%1").arg(logDir.absolutePath()));
+        appendLog(LogLevel::Error, QStringLiteral("Failed to create log directory: %1").arg(logDir.absolutePath()));
         return;
     }
 
     const QString filePath = logDir.filePath(fileName);
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        appendLog(LogLevel::Error, QStringLiteral("报告写入失败：%1").arg(file.errorString()));
+        appendLog(LogLevel::Error, QStringLiteral("Failed to write report: %1").arg(file.errorString()));
         return;
     }
 
     QTextStream out(&file);
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    out.setCodec("UTF-8");
-#endif
-    const StatisticsSnapshot snap = m_statistics.snapshot();
-    out << "CommBench Pro Test Report" << Qt::endl;
-    out << "Generated: " << QDateTime::currentDateTime().toString(Qt::ISODateWithMs) << Qt::endl;
-    out << "Mode: " << currentModeDescription() << Qt::endl;
-    out << "Config: " << currentConfigDescription() << Qt::endl << Qt::endl;
-    out << "Summary" << Qt::endl;
-    out << "Total Sent: " << snap.totalSent << Qt::endl;
-    out << "Success Received: " << snap.successReceived << Qt::endl;
-    out << "Lost Packets: " << snap.lostPackets << Qt::endl;
-    out << "Success Rate: " << QString::number(snap.successRate, 'f', 2) << "%" << Qt::endl;
-    out << "Average Elapsed: " << QString::number(snap.averageElapsedMs, 'f', 2) << " ms" << Qt::endl;
-    out << "Min Elapsed: " << snap.minElapsedMs << " ms" << Qt::endl;
-    out << "Max Elapsed: " << snap.maxElapsedMs << " ms" << Qt::endl << Qt::endl;
-    out << "Packet Details" << Qt::endl;
-    out << "ID,SentAt,ReceivedAt,ElapsedMs,Status,TX,RX" << Qt::endl;
+    out.setEncoding(QStringConverter::Utf8);
 
+    out << QStringLiteral("CommBench Pro Test Report\n");
+    out << QStringLiteral("==========================\n\n");
+    out << QStringLiteral("Mode: %1\n").arg(currentModeDescription());
+    out << QStringLiteral("Config: %1\n\n").arg(currentConfigDescription());
+
+    const StatisticsSnapshot snap = m_statistics.snapshot();
+    out << QStringLiteral("Total Sent: %1\n").arg(snap.totalSent);
+    out << QStringLiteral("Success RX: %1\n").arg(snap.successReceived);
+    out << QStringLiteral("Lost: %1\n").arg(snap.lostPackets);
+    out << QStringLiteral("Success Rate: %1%\n").arg(snap.successRate, 0, 'f', 2);
+    out << QStringLiteral("Average: %1 ms\n").arg(snap.averageElapsedMs, 0, 'f', 2);
+    out << QStringLiteral("Max: %1 ms\n").arg(snap.maxElapsedMs);
+    out << QStringLiteral("Min: %1 ms\n").arg(snap.minElapsedMs);
+
+    out << QStringLiteral("\n--- Packet Details ---\n");
     for (const PacketInfo &packet : m_statistics.packets()) {
-        const QString status = packet.status == PacketInfo::Status::Success ? QStringLiteral("Success") :
-                               packet.status == PacketInfo::Status::Timeout ? QStringLiteral("Timeout/Lost") : QStringLiteral("Pending");
-        out << packet.id << ','
-            << packet.sentAt.toString(Qt::ISODateWithMs) << ','
-            << packet.receivedAt.toString(Qt::ISODateWithMs) << ','
-            << packet.elapsedMs << ','
-            << status << ','
-            << QString::fromLatin1(packet.txPayload.toHex(' ')) << ','
-            << QString::fromLatin1(packet.rxPayload.toHex(' ')) << Qt::endl;
+        QString statusStr;
+        switch (packet.status) {
+        case PacketInfo::Status::Pending:
+            statusStr = QStringLiteral("PENDING");
+            break;
+        case PacketInfo::Status::Success:
+            statusStr = QStringLiteral("SUCCESS");
+            break;
+        case PacketInfo::Status::Timeout:
+            statusStr = QStringLiteral("TIMEOUT");
+            break;
+        }
+
+        out << QStringLiteral("#%1 %2 %3 ms\n")
+                   .arg(packet.id)
+                   .arg(statusStr)
+                   .arg(packet.elapsedMs >= 0 ? QString::number(packet.elapsedMs) : QStringLiteral("-"));
     }
 
-    appendLog(LogLevel::Info, QStringLiteral("报告已生成：%1").arg(filePath));
+    file.close();
+    appendLog(LogLevel::Info, QStringLiteral("Test report saved: %1").arg(filePath));
 }
 
-/**
- * @brief  checkFinishAfterLimit finishes after target count and pending packets are done
- * @return void
- */
 void MainWindow::checkFinishAfterLimit()
 {
     if (m_testRunning && m_finishingAfterLimit && !m_statistics.hasPendingPackets()) {
@@ -619,84 +782,55 @@ void MainWindow::checkFinishAfterLimit()
     }
 }
 
-/**
- * @brief  currentModeDescription returns current communication mode text
- * @return QString Mode text
- */
 QString MainWindow::currentModeDescription() const
 {
     return ui->comboBoxMode->currentIndex() == 0 ? QStringLiteral("TCP Network") : QStringLiteral("Serial Port");
 }
 
-/**
- * @brief  currentConfigDescription returns current communication configuration text
- * @return QString Configuration text
- */
 QString MainWindow::currentConfigDescription() const
 {
     if (ui->comboBoxMode->currentIndex() == 0) {
-        return QStringLiteral("%1:%2, response frame %3 bytes")
+        return QStringLiteral("%1:%2, protocol framed")
             .arg(ui->lineEditIp->text().trimmed())
-            .arg(ui->spinBoxPort->value())
-            .arg(tcpFrameLengthSpinBox(ui)->value());
+            .arg(ui->spinBoxPort->value());
     }
 
     return QStringLiteral("%1, %2 bps, %3 data, %4 stop, %5 parity")
-        .arg(ui->comboBoxSerialPort->currentText(), ui->comboBoxBaudRate->currentText(), ui->comboBoxDataBits->currentText(), ui->comboBoxStopBits->currentText(), ui->comboBoxParity->currentText());
+        .arg(ui->comboBoxSerialPort->currentText(), ui->comboBoxBaudRate->currentText(),
+             ui->comboBoxDataBits->currentText(), ui->comboBoxStopBits->currentText(),
+             ui->comboBoxParity->currentText());
 }
 
-/**
- * @brief  buildPayload builds payload from UI input
- * @return QByteArray Payload bytes
- */
-QByteArray MainWindow::buildPayload() const
+QByteArray MainWindow::buildPayload()
 {
-    const QString text = ui->lineEditCommand->text();
-    if (ui->comboBoxPayloadMode->currentText() == QStringLiteral("HEX")) {
-        QString compact = text;
-        compact.remove(' ');
-        compact.remove('\t');
-        compact.remove('\r');
-        compact.remove('\n');
-        if (compact.isEmpty() || compact.size() % 2 != 0) {
-            return {};
-        }
-        for (const QChar ch : compact) {
-            const ushort c = ch.toLower().unicode();
-            if (!ch.isDigit() && (c < 'a' || c > 'f')) {
-                return {};
-            }
-        }
-        return QByteArray::fromHex(compact.toLatin1());
+    const QList<CommandItem> commands = collectCommands();
+    if (commands.isEmpty()) {
+        return {};
     }
-    return text.toUtf8();
+
+    const CommandItem &item = commands.first();
+    if (item.hexMode) {
+        const QString hexStr = item.text.simplified().remove(QRegularExpression(QStringLiteral("\\s+")));
+        return QByteArray::fromHex(hexStr.toLatin1());
+    }
+    return item.text.toUtf8();
 }
 
-/**
- * @brief  payloadToDisplay converts payload to log display text
- * @param  payload Communication payload
- * @return QString Display text
- */
-QString MainWindow::payloadToDisplay(const QByteArray &payload) const
+QString MainWindow::payloadToDisplay(const QByteArray &payload)
 {
-    if (ui->comboBoxPayloadMode->currentText() == QStringLiteral("HEX")) {
-        return QString::fromLatin1(payload.toHex(' ').toUpper());
+    if (payload.isEmpty()) {
+        return QStringLiteral("(empty)");
     }
-    return QString::fromUtf8(payload);
+
+    return QString::fromLatin1(payload.toHex(' ').toUpper());
 }
 
-/**
- * @brief  htmlEscape escapes HTML special characters for log output
- * @param  value Raw text
- * @return QString Escaped text
- */
-QString MainWindow::htmlEscape(const QString &value) const
+QString MainWindow::htmlEscape(const QString &value)
 {
     QString escaped = value;
-    escaped.replace('&', QStringLiteral("&amp;"));
-    escaped.replace('<', QStringLiteral("&lt;"));
-    escaped.replace('>', QStringLiteral("&gt;"));
-    escaped.replace('"', QStringLiteral("&quot;"));
+    escaped.replace(QStringLiteral("&"), QStringLiteral("&amp;"));
+    escaped.replace(QStringLiteral("<"), QStringLiteral("&lt;"));
+    escaped.replace(QStringLiteral(">"), QStringLiteral("&gt;"));
     return escaped;
 }
 

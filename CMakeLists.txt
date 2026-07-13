@@ -22,8 +22,8 @@ set(PROJECT_SOURCES
     src/mainwindow.ui
     src/namespace.h
     src/icommunicationinterface.h
-    src/fixedlengthframedecoder.h
-    src/fixedlengthframedecoder.cpp
+    src/protocolframedecoder.h
+    src/protocolframedecoder.cpp
     src/tcpclientworker.h
     src/tcpclientworker.cpp
     src/serialclientworker.h
@@ -64,13 +64,13 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(FixedLengthFrameDecoderTest
-        tests/fixedlengthframedecoder_test.cpp
-        src/fixedlengthframedecoder.h
-        src/fixedlengthframedecoder.cpp
+    add_executable(ProtocolFrameDecoderTest
+        tests/protocolframedecoder_test.cpp
+        src/protocolframedecoder.h
+        src/protocolframedecoder.cpp
         src/namespace.h
     )
-    target_include_directories(FixedLengthFrameDecoderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(FixedLengthFrameDecoderTest PRIVATE Qt${QT_VERSION_MAJOR}::Core)
-    add_test(NAME FixedLengthFrameDecoderTest COMMAND FixedLengthFrameDecoderTest)
+    target_include_directories(ProtocolFrameDecoderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ProtocolFrameDecoderTest PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+    add_test(NAME ProtocolFrameDecoderTest COMMAND ProtocolFrameDecoderTest)
 endif()

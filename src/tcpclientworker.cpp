@@ -11,8 +11,8 @@ BEGIN_NAMESPACE_CIQTEK
  * @param  parent Qt父对象
  * @return void
  */
-TcpClientWorker::TcpClientWorker(QString host, quint16 port, int frameLength, QObject *parent)
-    : QObject(parent), m_host(std::move(host)), m_port(port), m_frameDecoder(frameLength)
+TcpClientWorker::TcpClientWorker(QString host, quint16 port, QObject *parent)
+    : QObject(parent), m_host(std::move(host)), m_port(port)
 {
 }
 
@@ -46,8 +46,11 @@ void TcpClientWorker::connect()
             emit signalDisconnected();
         });
         QObject::connect(m_socket, &QTcpSocket::readyRead, this, [this]() {
-            const QVector<QByteArray> frames = m_frameDecoder.appendData(m_socket->readAll());
-            for (const QByteArray &frame : frames) {
+            const ProtocolFrameDecoder::DecodeResult result = m_frameDecoder.appendData(m_socket->readAll());
+            for (const QString &error : result.errors) {
+                emit signalErrorOccurred(error);
+            }
+            for (const QByteArray &frame : result.frames) {
                 emit signalDataReceived(frame);
             }
         });

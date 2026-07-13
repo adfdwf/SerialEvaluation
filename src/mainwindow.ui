@@ -1,11 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
- Copyright(C), 2021-2022, Ciqtek Technology.
- Version:     dev
- Author:      MiPeng
- Date:        2026/07/08
- Description: 主窗口 UI 布局文件，定义通信配置、测试控制、统计和日志控件。
---><ui version="4.0">
+<ui version="4.0">
  <class>MainWindow</class>
  <widget class="QMainWindow" name="MainWindow">
   <property name="geometry">
@@ -104,16 +98,6 @@
           <item>
            <widget class="QSpinBox" name="spinBoxPort"/>
           </item>
-         <item>
-          <widget class="QLabel" name="labelTcpFrameLength">
-           <property name="text">
-            <string>Response bytes</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QSpinBox" name="spinBoxTcpFrameLength"/>
-         </item>
          </layout>
         </widget>
        </item>
@@ -199,54 +183,56 @@
          </layout>
         </widget>
        </item>
-       <item>
-        <spacer name="horizontalSpacerConfig">
-         <property name="orientation">
-          <enum>Qt::Horizontal</enum>
+      <item>
+       <widget class="QWidget" name="widgetConnectionState" native="true">
+        <layout class="QHBoxLayout" name="horizontalLayoutConnection">
+         <property name="leftMargin">
+          <number>0</number>
          </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>40</width>
-           <height>20</height>
-          </size>
+         <property name="topMargin">
+          <number>0</number>
          </property>
-        </spacer>
-       </item>
-       <item>
-        <widget class="QFrame" name="frameLed">
-         <property name="frameShape">
-          <enum>QFrame::StyledPanel</enum>
+         <property name="rightMargin">
+          <number>0</number>
          </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QLabel" name="labelConnectionState">
-         <property name="minimumSize">
-          <size>
-           <width>105</width>
-           <height>0</height>
-          </size>
+         <property name="bottomMargin">
+          <number>0</number>
          </property>
-         <property name="text">
-          <string>Disconnected</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="pushButtonConnect">
-         <property name="text">
-          <string>Connect</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="pushButtonDisconnect">
-         <property name="text">
-          <string>Disconnect</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
+         <item>
+          <widget class="QFrame" name="frameLed">
+           <property name="frameShape">
+            <enum>QFrame::NoFrame</enum>
+           </property>
+           <property name="frameShadow">
+            <enum>QFrame::Plain</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="labelConnectionState">
+           <property name="text">
+            <string>Disconnected</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="pushButtonConnect">
+           <property name="text">
+            <string>Connect</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="pushButtonDisconnect">
+           <property name="text">
+            <string>Disconnect</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
      </widget>
     </item>
     <item>
@@ -256,36 +242,12 @@
       </property>
       <layout class="QHBoxLayout" name="horizontalLayoutControl">
        <property name="spacing">
-        <number>10</number>
+        <number>12</number>
        </property>
-       <item>
-        <widget class="QLabel" name="labelCommand">
-         <property name="text">
-          <string>Command</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QLineEdit" name="lineEditCommand">
-         <property name="placeholderText">
-          <string>ASCII command or HEX bytes</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QComboBox" name="comboBoxPayloadMode">
-         <property name="minimumSize">
-          <size>
-           <width>90</width>
-           <height>0</height>
-          </size>
-         </property>
-        </widget>
-       </item>
        <item>
         <widget class="QLabel" name="labelInterval">
          <property name="text">
-          <string>Interval ms</string>
+          <string>Interval (ms)</string>
          </property>
         </widget>
        </item>
@@ -295,7 +257,7 @@
        <item>
         <widget class="QLabel" name="labelSendCount">
          <property name="text">
-          <string>Count</string>
+          <string>Send Count</string>
          </property>
         </widget>
        </item>
@@ -305,7 +267,7 @@
        <item>
         <widget class="QLabel" name="labelTimeout">
          <property name="text">
-          <string>Timeout ms</string>
+          <string>Timeout (ms)</string>
          </property>
         </widget>
        </item>
@@ -325,6 +287,59 @@
           <string>Stop</string>
          </property>
         </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="pushButtonSendAll">
+         <property name="text">
+          <string>Send All</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="groupBoxCommands">
+      <property name="title">
+       <string>Commands</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayoutCommands">
+       <property name="spacing">
+        <number>4</number>
+       </property>
+       <item>
+        <layout class="QHBoxLayout" name="horizontalLayoutCommandToolbar">
+         <item>
+          <widget class="QPushButton" name="pushButtonAddCommand">
+           <property name="text">
+            <string>+ Add</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="pushButtonRemoveCommand">
+           <property name="text">
+            <string>- Remove</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacerCommandToolbar">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QTableWidget" name="tableCommands"/>
        </item>
       </layout>
      </widget>
@@ -441,7 +456,7 @@
           <property name="text">
            <string>0 ms</string>
           </property>
-         </widget>
+        </widget>
         </item>
         <item row="7" column="0" colspan="2">
          <spacer name="verticalSpacerStats">
