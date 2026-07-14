@@ -444,7 +444,8 @@ void MainWindow::slotSendNextPacket()
         return;
     }
 
-    const PacketInfo packet = m_statistics.recordSend(payload);
+    const QString dataFormat = item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII");
+    const PacketInfo packet = m_statistics.recordSend(payload, dataFormat);
     ++m_perCommandSendCount[m_currentCommandIndex];
     appendLog(LogLevel::Tx, QStringLiteral("#%1 %2").arg(packet.id).arg(item.text));
     QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
@@ -767,7 +768,25 @@ void MainWindow::finalizeTestReport()
     out << QStringLiteral("CommBench Pro Test Report\n");
     out << QStringLiteral("==========================\n\n");
     out << QStringLiteral("Mode: %1\n").arg(currentModeDescription());
-    out << QStringLiteral("Config: %1\n\n").arg(currentConfigDescription());
+    out << QStringLiteral("Config: %1\n").arg(currentConfigDescription());
+    out << QStringLiteral("Interval: %1 ms\n").arg(ui->spinBoxInterval->value());
+    out << QStringLiteral("Timeout: %1 ms\n").arg(ui->spinBoxTimeout->value());
+    out << QStringLiteral("Send Count: %1\n\n")
+               .arg(ui->spinBoxSendCount->value() == 0 ? QStringLiteral("unlimited") : QString::number(ui->spinBoxSendCount->value()));
+
+    out << QStringLiteral("--- Commands ---\n");
+    const QList<CommandItem> commands = collectCommands();
+    int commandNumber = 1;
+    for (const CommandItem &item : commands) {
+        const QString format = item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII");
+        QString commandText = item.text;
+        commandText.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
+        commandText.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+        out << QStringLiteral("Command %1 | Format: %2 | Data: %3\n")
+                   .arg(commandNumber++)
+                   .arg(format, commandText);
+    }
+    out << QLatin1Char('\n');
 
     const StatisticsSnapshot snap = m_statistics.snapshot();
     out << QStringLiteral("Total Sent: %1\n").arg(snap.totalSent);
@@ -777,6 +796,10 @@ void MainWindow::finalizeTestReport()
     out << QStringLiteral("Average: %1 ms\n").arg(snap.averageElapsedMs, 0, 'f', 2);
     out << QStringLiteral("Max: %1 ms\n").arg(snap.maxElapsedMs);
     out << QStringLiteral("Min: %1 ms\n").arg(snap.minElapsedMs);
+    out << QStringLiteral("P50: %1 ms\n").arg(snap.p50Ms, 0, 'f', 3);
+    out << QStringLiteral("P90: %1 ms\n").arg(snap.p90Ms, 0, 'f', 3);
+    out << QStringLiteral("P95: %1 ms\n").arg(snap.p95Ms, 0, 'f', 3);
+    out << QStringLiteral("P99: %1 ms\n").arg(snap.p99Ms, 0, 'f', 3);
 
     out << QStringLiteral("\n--- Packet Details ---\n");
     for (const PacketInfo &packet : m_statistics.packets()) {
@@ -793,10 +816,19 @@ void MainWindow::finalizeTestReport()
             break;
         }
 
-        out << QStringLiteral("#%1 %2 %3 ms\n")
+        QString txData = QString::fromUtf8(packet.txPayload);
+        if (packet.txFormat == QStringLiteral("HEX")) {
+            txData = QString::fromLatin1(packet.txPayload.toHex(' ').toUpper());
+        }
+        txData.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
+        txData.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+
+        out << QStringLiteral("#%1 %2 %3 ms | Format: %4 | TX Data: %5\n")
                    .arg(packet.id)
                    .arg(statusStr)
-                   .arg(packet.elapsedMs >= 0 ? QString::number(packet.elapsedMs) : QStringLiteral("-"));
+                   .arg(packet.elapsedMs >= 0 ? QString::number(packet.elapsedMs) : QStringLiteral("-"))
+                   .arg(packet.txFormat.isEmpty() ? QStringLiteral("UNKNOWN") : packet.txFormat)
+                   .arg(txData);
     }
 
     file.close();

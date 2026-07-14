@@ -50,6 +50,9 @@ struct PacketInfo
     /** Transmitted payload bytes */
     QByteArray txPayload;
 
+    /** User-selected data format used for transmission (ASCII or HEX) */
+    QString txFormat;
+
     /** Received response payload bytes */
     QByteArray rxPayload;
 };
@@ -130,7 +133,7 @@ public:
      * @param payload The byte array that was sent
      * @return PacketInfo containing the assigned ID and send timestamp
      */
-    PacketInfo recordSend(const QByteArray &payload);
+    PacketInfo recordSend(const QByteArray &payload, const QString &format = QString());
 
     /**
      * @brief Records a received response and matches it to the earliest
