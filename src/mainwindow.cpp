@@ -645,10 +645,10 @@ void MainWindow::updateStatsView()
         if (label) label->setText(text);
     };
 
-    
-
-
-    
+    setLabel(QStringLiteral("labelP50Value"), QStringLiteral("%1 ms").arg(snap.p50Ms, 0, 'f', 3));
+    setLabel(QStringLiteral("labelP90Value"), QStringLiteral("%1 ms").arg(snap.p90Ms, 0, 'f', 3));
+    setLabel(QStringLiteral("labelP95Value"), QStringLiteral("%1 ms").arg(snap.p95Ms, 0, 'f', 3));
+    setLabel(QStringLiteral("labelP99Value"), QStringLiteral("%1 ms").arg(snap.p99Ms, 0, 'f', 3));
 }
 
 void MainWindow::setupStatsLabels()
