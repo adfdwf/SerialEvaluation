@@ -3,4 +3,6 @@
 out/
 build/
 *.user
+# 忽略用户个人预设
+CMakeUserPresets.json
 
