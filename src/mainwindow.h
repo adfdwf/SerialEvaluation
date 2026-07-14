@@ -5,8 +5,10 @@
 #include "statisticsmanager.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QLineEdit>
 #include <QMainWindow>
+#include <QQueue>
 #include <QElapsedTimer>
 #include <QObject>
 #include <QString>
@@ -17,6 +19,8 @@
 #include <QWidget>
 
 class QTableWidget;
+class QTabWidget;
+class QPushButton;
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -30,6 +34,27 @@ struct CommandItem {
     QString text;
     bool hexMode = false;
     bool valid = true;
+};
+
+struct TcpPortSession {
+    quint16 port = 0;
+    QThread *thread = nullptr;
+    QObject *worker = nullptr;
+    bool connected = false;
+    bool connecting = false;
+    QTimer *sendTimer = nullptr;
+    QTableWidget *commandTable = nullptr;
+    QWidget *commandPage = nullptr;
+    StatisticsManager statistics;
+    QElapsedTimer sendClock;
+    qint64 nextSendDeadlineMs = 0;
+    bool testRunning = false;
+    bool finishingAfterLimit = false;
+    int currentCommandIndex = 0;
+    QVector<int> perCommandSendCount;
+    QQueue<CommandItem> oneShotCommands;
+    bool oneShotRunning = false;
+    qint64 nextOneShotDeadlineMs = 0;
 };
 
 class MainWindow final : public QMainWindow
@@ -58,6 +83,10 @@ private Q_SLOTS:
     void slotRemoveCommandRow();
     void slotCommandTextChanged();
     void slotHexModeToggled();
+    void slotAddTcpPort();
+    void slotRemoveTcpPort();
+    void slotSendSelectedTcpPort();
+    void slotSendAllTcpPorts();
 
 private:
     enum class ConnectionState {
@@ -86,17 +115,42 @@ private:
     QString currentModeDescription() const;
     QString currentConfigDescription() const;
     QByteArray buildPayload();
-    QString payloadToDisplay(const QByteArray &payload);
+    QString payloadToDisplay(const QByteArray &payload,
+                             const QString &format = QString());
     QString htmlEscape(const QString &value);
 
     void setupCommandTable();
     void populateCommandTableFromList();
     QList<CommandItem> collectCommands();
     static bool isValidHexChar(QChar c);
-    bool validateHexSyntax(const QString &text);
+    static bool validateHexSyntax(const QString &text);
+    static bool validateHexPayload(const QString &text);
     void setupStatsLabels();
     void scheduleStatsRefresh();
     void scheduleNextSend(int intervalMs);
+
+    bool isTcpMode() const;
+    void setupTcpPortUi();
+    void addTcpPort(quint16 port);
+    void removeTcpPort(quint16 port);
+    void addTcpCommand(TcpPortSession *session);
+    void removeTcpCommand(TcpPortSession *session);
+    QList<CommandItem> collectCommands(QTableWidget *table) const;
+    bool validateCommands(const QList<CommandItem> &commands);
+    void connectTcpPorts();
+    void disconnectTcpPorts();
+    void destroyTcpWorkers();
+    void startTcpTest();
+    void stopTcpTest(bool manualStop);
+    void sendAllTcpPort(TcpPortSession *session);
+    void sendNextOneShotTcpPacket(TcpPortSession *session);
+    void scheduleNextOneShotTcpPacket(TcpPortSession *session, int intervalMs);
+    void sendNextTcpPacket(TcpPortSession *session);
+    void scheduleNextTcpPacket(TcpPortSession *session, int intervalMs);
+    void checkTcpTimeouts();
+    void updateTcpPortRow(TcpPortSession *session, const QString &state);
+    void updateTcpConnectionState();
+    void finalizeTcpReport();
 
 private:
     Ui::MainWindow *ui = nullptr;
@@ -115,6 +169,12 @@ private:
     int m_currentCommandIndex = 0;
     int m_totalCommands = 0;
     QVector<int> m_perCommandSendCount;
+    QHash<quint16, TcpPortSession *> m_tcpSessions;
+    QTableWidget *m_tcpPortTable = nullptr;
+    QTabWidget *m_tcpCommandTabs = nullptr;
+    QPushButton *m_tcpAddPortButton = nullptr;
+    QPushButton *m_tcpRemovePortButton = nullptr;
+    QPushButton *m_tcpSendAllButton = nullptr;
 };
 
 END_NAMESPACE_CIQTEK

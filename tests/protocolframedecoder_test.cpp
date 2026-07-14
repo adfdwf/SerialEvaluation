@@ -53,9 +53,14 @@ int main(int argc, char *argv[])
 
     const QByteArray emptyPayloadFrame = makeFrame(0x01);
     const QByteArray payloadFrame = makeFrame(0x02, QByteArray::fromHex("01020304"));
+    const QByteArray deviceResponse = QByteArray::fromHex("A0 00 64 81 01 00 00 10 96");
 
     passed &= expectFrames(decoder.appendData(emptyPayloadFrame.left(4)), {}, "partial header");
     passed &= expectFrames(decoder.appendData(emptyPayloadFrame.mid(4)), {emptyPayloadFrame}, "completed zero-payload frame");
+
+    ProtocolFrameDecoder responseDecoder;
+    passed &= expectFrames(responseDecoder.appendData(deviceResponse.left(3)), {}, "partial device response header");
+    passed &= expectFrames(responseDecoder.appendData(deviceResponse.mid(3)), {deviceResponse}, "device response frame");
 
     ProtocolFrameDecoder stickyDecoder;
     QByteArray stickyInput("NOISE", 5);
@@ -98,6 +103,12 @@ int main(int argc, char *argv[])
     const auto checksumResult = checksumDecoder.appendData(badFrame + payloadFrame);
     passed &= !checksumResult.errors.isEmpty();
     passed &= expectFrames(checksumResult, {payloadFrame}, "resync after checksum failure");
+
+    const QByteArray largePayload(4 * 1024 * 1024, static_cast<char>(0x5A));
+    const QByteArray largeFrame = makeFrame(0x03, largePayload);
+    ProtocolFrameDecoder largeDecoder;
+    const auto largeResult = largeDecoder.appendData(largeFrame);
+    passed &= expectFrames(largeResult, {largeFrame}, "4 MiB protocol frame");
 
     if (!passed) {
         qCritical() << "ProtocolFrameDecoder tests failed";

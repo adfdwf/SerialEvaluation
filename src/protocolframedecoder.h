@@ -11,7 +11,7 @@
 BEGIN_NAMESPACE_CIQTEK
 
 /**
- * @brief Decodes TCP byte streams into protocol frames, with raw fallback.
+ * @brief Decodes request and device-response TCP frames, with raw fallback.
  *
  * Protocol frame format inferred from the command sample:
  *   A0 81 01 00 00 00 00 00 22
@@ -19,6 +19,9 @@ BEGIN_NAMESPACE_CIQTEK
  * - bytes 3..6: big-endian payload length
  * - byte 7: header field before payload
  * - last byte: low 8 bits of the sum of all previous bytes
+ *
+ * The device response shown by the benchmark protocol is a fixed nine-byte
+ * frame beginning with A0 00 64 81 and uses the same checksum rule.
  *
  * If a received byte block does not contain a protocol header, it is emitted
  * as one raw frame so generic TCP echo/reply data does not time out.
@@ -45,10 +48,13 @@ private:
     static constexpr int kHeaderSize = 8;
     static constexpr int kChecksumSize = 1;
     static constexpr int kMinimumFrameSize = kHeaderSize + kChecksumSize;
-    static constexpr quint32 kMaximumPayloadLength = 1024 * 1024;
+    static constexpr int kResponseFrameSize = 9;
+    static constexpr quint32 kMaximumPayloadLength = 4 * 1024 * 1024;
 
     quint32 payloadLength() const;
     static int findHeader(const QByteArray &bytes, int from = 0);
+    static int findResponseHeader(const QByteArray &bytes);
+    static bool hasPartialResponseHeader(const QByteArray &bytes);
     static bool checksumValid(const QByteArray &frame);
     static quint8 checksumFor(const QByteArray &bytes, int length);
 
@@ -61,8 +67,14 @@ inline ProtocolFrameDecoder::DecodeResult ProtocolFrameDecoder::appendData(const
 
     DecodeResult result;
     while (!m_buffer.isEmpty()) {
-        const int headerIndex = findHeader(m_buffer);
+        const int requestIndex = findHeader(m_buffer);
+        const int responseIndex = findResponseHeader(m_buffer);
+        const bool responseFrame = responseIndex >= 0 && (requestIndex < 0 || responseIndex < requestIndex);
+        const int headerIndex = responseFrame ? responseIndex : requestIndex;
         if (headerIndex < 0) {
+            if (hasPartialResponseHeader(m_buffer)) {
+                break;
+            }
             if (m_buffer.size() == 1 && static_cast<quint8>(m_buffer.at(0)) == kHeaderByte) {
                 break;
             }
@@ -75,6 +87,20 @@ inline ProtocolFrameDecoder::DecodeResult ProtocolFrameDecoder::appendData(const
         if (headerIndex > 0) {
             result.discardedBytes += headerIndex;
             m_buffer.remove(0, headerIndex);
+        }
+
+        if (responseFrame) {
+            if (m_buffer.size() < kResponseFrameSize) {
+                break;
+            }
+            const QByteArray frame = m_buffer.left(kResponseFrameSize);
+            if (!checksumValid(frame)) {
+                result.errors.push_back(QStringLiteral("TCP device response checksum failed"));
+            } else {
+                result.frames.push_back(frame);
+            }
+            m_buffer.remove(0, kResponseFrameSize);
+            continue;
         }
 
         if (m_buffer.size() < kMinimumFrameSize) {
@@ -136,6 +162,31 @@ inline int ProtocolFrameDecoder::findHeader(const QByteArray &bytes, int from)
         }
     }
     return -1;
+}
+
+inline int ProtocolFrameDecoder::findResponseHeader(const QByteArray &bytes)
+{
+    for (int i = 0; i + 3 < bytes.size(); ++i) {
+        if (static_cast<quint8>(bytes.at(i)) == 0xA0 &&
+            static_cast<quint8>(bytes.at(i + 1)) == 0x00 &&
+            static_cast<quint8>(bytes.at(i + 2)) == 0x64 &&
+            static_cast<quint8>(bytes.at(i + 3)) == 0x81) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+inline bool ProtocolFrameDecoder::hasPartialResponseHeader(const QByteArray &bytes)
+{
+    static constexpr unsigned char prefix[] = {0xA0, 0x00, 0x64, 0x81};
+    const int length = qMin(bytes.size(), 3);
+    for (int i = 0; i < length; ++i) {
+        if (static_cast<quint8>(bytes.at(i)) != prefix[i]) {
+            return false;
+        }
+    }
+    return !bytes.isEmpty() && bytes.size() < 4;
 }
 
 inline bool ProtocolFrameDecoder::checksumValid(const QByteArray &frame)
