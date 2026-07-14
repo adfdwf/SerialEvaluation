@@ -50,7 +50,19 @@ void SerialClientWorker::connect()
                              if (error == QSerialPort::NoError) {
                                  return;
                              }
-                             emit signalErrorOccurred(m_serial ? m_serial->errorString() : QStringLiteral("Serial port error"));
+                             const QString message = m_serial ? m_serial->errorString() : QStringLiteral("Serial port error");
+                             const bool wasOpen = m_serial && m_serial->isOpen();
+                             emit signalErrorOccurred(message);
+                             // Resource/device errors indicate an unexpected
+                             // hot-unplug or OS-level disconnect. Close the
+                             // handle and notify the UI so this session is
+                             // marked disconnected without affecting peers.
+                             if (wasOpen && (error == QSerialPort::ResourceError ||
+                                             error == QSerialPort::DeviceNotFoundError ||
+                                             error == QSerialPort::PermissionError)) {
+                                 m_serial->close();
+                                 emit signalDisconnected();
+                             }
                          });
     }
 

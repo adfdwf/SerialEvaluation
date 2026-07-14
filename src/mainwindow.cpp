@@ -14,8 +14,10 @@
 #include <QMetaObject>
 #include <QMessageBox>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHostAddress>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QSerialPortInfo>
 #include <QTableWidget>
 #include <QTabWidget>
@@ -42,11 +44,15 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     stopTcpTest(true);
+    stopSerialTest(true);
     stopTest(true);
     destroyWorker();
     destroyTcpWorkers();
+    destroySerialWorkers();
     qDeleteAll(m_tcpSessions);
     m_tcpSessions.clear();
+    qDeleteAll(m_serialSessions);
+    m_serialSessions.clear();
     delete ui;
 }
 
@@ -82,7 +88,13 @@ void MainWindow::setupUiLogic()
 
     setupCommandTable();
     setupTcpPortUi();
+    setupSerialPortUi();
     setupStatsLabels();
+
+    m_serialHotplugTimer = new QTimer(this);
+    m_serialHotplugTimer->setInterval(2000);
+    QObject::connect(m_serialHotplugTimer, &QTimer::timeout, this, &MainWindow::slotRefreshSerialPorts);
+    m_serialHotplugTimer->start();
 
     ui->pushButtonStop->setEnabled(false);
 
@@ -97,6 +109,10 @@ void MainWindow::setupUiLogic()
     QObject::connect(m_tcpAddPortButton, &QPushButton::clicked, this, &MainWindow::slotAddTcpPort);
     QObject::connect(m_tcpRemovePortButton, &QPushButton::clicked, this, &MainWindow::slotRemoveTcpPort);
     QObject::connect(m_tcpSendAllButton, &QPushButton::clicked, this, &MainWindow::slotSendAllTcpPorts);
+    QObject::connect(m_serialAddPortButton, &QPushButton::clicked, this, &MainWindow::slotAddSerialPort);
+    QObject::connect(m_serialRemovePortButton, &QPushButton::clicked, this, &MainWindow::slotRemoveSerialPort);
+    QObject::connect(m_serialRefreshButton, &QPushButton::clicked, this, &MainWindow::slotRefreshSerialPorts);
+    QObject::connect(m_serialSendAllButton, &QPushButton::clicked, this, &MainWindow::slotSendAllSerialPorts);
     QObject::connect(m_sendTimer, &QTimer::timeout, this, &MainWindow::slotSendNextPacket);
     QObject::connect(m_timeoutTimer, &QTimer::timeout, this, &MainWindow::slotCheckTimeouts);
 }
@@ -378,23 +394,25 @@ void MainWindow::slotModeChanged(int index)
 {
     const bool serialMode = index == 1;
     stopTcpTest(true);
-    stopTest(true);
     destroyTcpWorkers();
+    stopSerialTest(true);
+    destroySerialWorkers();
     ui->widgetTcpConfig->setVisible(!serialMode);
-    ui->widgetSerialConfig->setVisible(serialMode);
-    ui->groupBoxCommands->setVisible(serialMode);
+    ui->widgetSerialConfig->setVisible(false);
+    ui->groupBoxCommands->setVisible(false);
+    if (m_serialPortBox) {
+        m_serialPortBox->setVisible(serialMode);
+    }
     if (m_tcpPortTable) {
         m_tcpPortTable->parentWidget()->setVisible(!serialMode);
     }
-    ui->spinBoxPort->setVisible(serialMode);
-    if (auto *portLabel = ui->groupBoxConfig->findChild<QLabel *>(QStringLiteral("labelPort"))) {
-        portLabel->setVisible(serialMode);
-    }
+    ui->spinBoxPort->setVisible(false);
+    if (auto *portLabel = ui->groupBoxConfig->findChild<QLabel *>(QStringLiteral("labelPort"))) portLabel->setVisible(false);
     destroyWorker();
     if (serialMode) {
-        ui->pushButtonConnect->setText(QStringLiteral("Connect"));
-        ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect"));
-        setConnectionState(ConnectionState::Disconnected);
+        ui->pushButtonConnect->setText(QStringLiteral("Connect All"));
+        ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect All"));
+        updateSerialConnectionState();
     } else {
         ui->pushButtonConnect->setText(QStringLiteral("Connect All"));
         ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect All"));
@@ -626,6 +644,332 @@ void MainWindow::slotRefreshSerialPorts()
             ui->comboBoxSerialPort->setCurrentIndex(index);
         }
     }
+    refreshSerialPortChoices();
+}
+
+void MainWindow::setupSerialPortUi()
+{
+    auto *mainLayout = qobject_cast<QVBoxLayout *>(ui->centralwidget->layout());
+    if (!mainLayout) {
+        return;
+    }
+
+    m_serialPortBox = new QGroupBox(QStringLiteral("Serial Ports"), ui->centralwidget);
+    auto *boxLayout = new QVBoxLayout(m_serialPortBox);
+    auto *toolbar = new QHBoxLayout();
+    m_serialAddPortButton = new QPushButton(QStringLiteral("+ Add Port"), m_serialPortBox);
+    m_serialRemovePortButton = new QPushButton(QStringLiteral("- Remove Port"), m_serialPortBox);
+    m_serialRefreshButton = new QPushButton(QStringLiteral("Refresh"), m_serialPortBox);
+    m_serialSendAllButton = new QPushButton(QStringLiteral("Send All Serial Ports"), m_serialPortBox);
+    toolbar->addWidget(m_serialAddPortButton);
+    toolbar->addWidget(m_serialRemovePortButton);
+    toolbar->addWidget(m_serialRefreshButton);
+    toolbar->addWidget(m_serialSendAllButton);
+    toolbar->addStretch();
+    boxLayout->addLayout(toolbar);
+
+    m_serialPortTable = new QTableWidget(m_serialPortBox);
+    m_serialPortTable->setColumnCount(3);
+    m_serialPortTable->setHorizontalHeaderLabels({QStringLiteral("Port"), QStringLiteral("State"), QStringLiteral("Send All")});
+    m_serialPortTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_serialPortTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_serialPortTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_serialPortTable->verticalHeader()->setVisible(false);
+    m_serialPortTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_serialPortTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_serialPortTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    boxLayout->addWidget(m_serialPortTable);
+
+    m_serialCommandTabs = new QTabWidget(m_serialPortBox);
+    boxLayout->addWidget(m_serialCommandTabs);
+    mainLayout->insertWidget(2, m_serialPortBox);
+
+    const QList<QSerialPortInfo> available = QSerialPortInfo::availablePorts();
+    if (!available.isEmpty()) {
+        addSerialPort(available.first().portName());
+    }
+    m_serialPortBox->setVisible(false);
+}
+
+void MainWindow::addSerialPort(const QString &portName)
+{
+    const QString name = portName.trimmed();
+    if (name.isEmpty() || m_serialSessions.contains(name)) {
+        return;
+    }
+
+    auto *session = new SerialPortSession();
+    session->portName = name;
+    session->commandPage = new QWidget(m_serialCommandTabs);
+    auto *pageLayout = new QVBoxLayout(session->commandPage);
+
+    auto *configLayout = new QHBoxLayout();
+    configLayout->addWidget(new QLabel(QStringLiteral("Port"), session->commandPage));
+    session->portCombo = new QComboBox(session->commandPage);
+    // The session key and log prefix are the selected port. Changing it in
+    // place would make an active worker ambiguous; remove/re-add a session to
+    // change its port while retaining independent configuration.
+    session->portCombo->setEditable(false);
+    session->portCombo->setEnabled(false);
+    configLayout->addWidget(session->portCombo);
+    configLayout->addWidget(new QLabel(QStringLiteral("Baud"), session->commandPage));
+    session->baudCombo = new QComboBox(session->commandPage);
+    session->baudCombo->addItems({QStringLiteral("9600"), QStringLiteral("19200"), QStringLiteral("38400"), QStringLiteral("57600"), QStringLiteral("115200"), QStringLiteral("230400"), QStringLiteral("460800"), QStringLiteral("921600")});
+    session->baudCombo->setCurrentText(QStringLiteral("115200"));
+    configLayout->addWidget(session->baudCombo);
+    configLayout->addWidget(new QLabel(QStringLiteral("Data"), session->commandPage));
+    session->dataBitsCombo = new QComboBox(session->commandPage);
+    session->dataBitsCombo->addItems({QStringLiteral("5"), QStringLiteral("6"), QStringLiteral("7"), QStringLiteral("8")});
+    session->dataBitsCombo->setCurrentText(QStringLiteral("8"));
+    configLayout->addWidget(session->dataBitsCombo);
+    configLayout->addWidget(new QLabel(QStringLiteral("Stop"), session->commandPage));
+    session->stopBitsCombo = new QComboBox(session->commandPage);
+    session->stopBitsCombo->addItems({QStringLiteral("1"), QStringLiteral("1.5"), QStringLiteral("2")});
+    configLayout->addWidget(session->stopBitsCombo);
+    configLayout->addWidget(new QLabel(QStringLiteral("Parity"), session->commandPage));
+    session->parityCombo = new QComboBox(session->commandPage);
+    session->parityCombo->addItems({QStringLiteral("None"), QStringLiteral("Even"), QStringLiteral("Odd"), QStringLiteral("Mark"), QStringLiteral("Space")});
+    configLayout->addWidget(session->parityCombo);
+    configLayout->addStretch();
+    pageLayout->addLayout(configLayout);
+
+    for (const QSerialPortInfo &info : QSerialPortInfo::availablePorts()) {
+        session->portCombo->addItem(info.portName());
+    }
+    session->portCombo->setCurrentText(name);
+
+    auto *commandToolbar = new QHBoxLayout();
+    auto *addButton = new QPushButton(QStringLiteral("+ Add Command"), session->commandPage);
+    auto *removeButton = new QPushButton(QStringLiteral("- Remove Command"), session->commandPage);
+    auto *sendButton = new QPushButton(QStringLiteral("Send All %1").arg(name), session->commandPage);
+    commandToolbar->addWidget(addButton);
+    commandToolbar->addWidget(removeButton);
+    commandToolbar->addWidget(sendButton);
+    commandToolbar->addStretch();
+    pageLayout->addLayout(commandToolbar);
+
+    session->commandTable = new QTableWidget(session->commandPage);
+    session->commandTable->setColumnCount(3);
+    session->commandTable->setHorizontalHeaderLabels({QStringLiteral("#"), QStringLiteral("Command"), QStringLiteral("Mode")});
+    session->commandTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    session->commandTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    session->commandTable->verticalHeader()->setVisible(false);
+    session->commandTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    session->commandTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    session->commandTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    pageLayout->addWidget(session->commandTable);
+
+    auto *statsBox = new QGroupBox(QStringLiteral("Realtime Statistics - %1").arg(name), session->commandPage);
+    auto *statsLayout = new QGridLayout(statsBox);
+    const QStringList statNames = {QStringLiteral("Total"), QStringLiteral("Success"), QStringLiteral("Lost"), QStringLiteral("P50"), QStringLiteral("P90"), QStringLiteral("P95"), QStringLiteral("P99")};
+    const QStringList objectNames = {QStringLiteral("serialTotalValue"), QStringLiteral("serialSuccessValue"), QStringLiteral("serialLostValue"), QStringLiteral("serialP50Value"), QStringLiteral("serialP90Value"), QStringLiteral("serialP95Value"), QStringLiteral("serialP99Value")};
+    for (int i = 0; i < statNames.size(); ++i) {
+        auto *label = new QLabel(statNames.at(i), statsBox);
+        auto *value = new QLabel(QStringLiteral("--"), statsBox);
+        value->setObjectName(objectNames.at(i));
+        statsLayout->addWidget(label, i / 4, (i % 4) * 2);
+        statsLayout->addWidget(value, i / 4, (i % 4) * 2 + 1);
+    }
+    pageLayout->addWidget(statsBox);
+
+    m_serialCommandTabs->addTab(session->commandPage, name);
+    m_serialSessions.insert(name, session);
+    QObject::connect(addButton, &QPushButton::clicked, this, [this, session]() { addSerialCommand(session); });
+    QObject::connect(removeButton, &QPushButton::clicked, this, [this, session]() { removeSerialCommand(session); });
+    QObject::connect(sendButton, &QPushButton::clicked, this, [this, session]() { sendAllSerialPort(session); });
+
+    const int row = m_serialPortTable->rowCount();
+    m_serialPortTable->insertRow(row);
+    m_serialPortTable->setItem(row, 0, new QTableWidgetItem(name));
+    m_serialPortTable->setItem(row, 1, new QTableWidgetItem(QStringLiteral("Disconnected")));
+    auto *rowSendButton = new QPushButton(QStringLiteral("Send All"), m_serialPortTable);
+    QObject::connect(rowSendButton, &QPushButton::clicked, this, [this, session]() { sendAllSerialPort(session); });
+    m_serialPortTable->setCellWidget(row, 2, rowSendButton);
+    addSerialCommand(session);
+    updateSerialConnectionState();
+}
+
+void MainWindow::removeSerialPort(const QString &portName)
+{
+    SerialPortSession *session = m_serialSessions.take(portName);
+    if (!session) {
+        return;
+    }
+    destroySerialWorker(session);
+    const int tabIndex = m_serialCommandTabs->indexOf(session->commandPage);
+    if (tabIndex >= 0) {
+        m_serialCommandTabs->removeTab(tabIndex);
+    }
+    for (int row = 0; row < m_serialPortTable->rowCount(); ++row) {
+        if (m_serialPortTable->item(row, 0) && m_serialPortTable->item(row, 0)->text() == portName) {
+            m_serialPortTable->removeRow(row);
+            break;
+        }
+    }
+    delete session->sendTimer;
+    session->sendTimer = nullptr;
+    delete session->commandPage;
+    session->commandPage = nullptr;
+    delete session;
+    updateSerialConnectionState();
+}
+
+void MainWindow::slotAddSerialPort()
+{
+    QStringList names;
+    for (const QSerialPortInfo &info : QSerialPortInfo::availablePorts()) {
+        names.append(info.portName());
+    }
+#ifdef Q_OS_WIN
+    const QString defaultName = names.isEmpty() ? QStringLiteral("COM1") : names.first();
+#else
+    const QString defaultName = names.isEmpty() ? QStringLiteral("/dev/ttyUSB0") : names.first();
+#endif
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("Add Serial Port"), QStringLiteral("Port name:"), QLineEdit::Normal, defaultName, &ok).trimmed();
+    if (!ok || name.isEmpty()) {
+        return;
+    }
+    if (m_serialSessions.contains(name)) {
+        QMessageBox::warning(this, QStringLiteral("Duplicate port"), QStringLiteral("This serial port has already been added."));
+        return;
+    }
+    addSerialPort(name);
+}
+
+void MainWindow::slotRemoveSerialPort()
+{
+    const int row = m_serialPortTable ? m_serialPortTable->currentRow() : -1;
+    if (row < 0 || !m_serialPortTable->item(row, 0)) {
+        return;
+    }
+    removeSerialPort(m_serialPortTable->item(row, 0)->text());
+}
+
+void MainWindow::slotSendAllSerialPorts()
+{
+    for (SerialPortSession *session : m_serialSessions) {
+        sendAllSerialPort(session);
+    }
+}
+
+void MainWindow::refreshSerialPortChoices()
+{
+    QStringList names;
+    for (const QSerialPortInfo &info : QSerialPortInfo::availablePorts()) {
+        names.append(info.portName());
+    }
+    for (SerialPortSession *session : m_serialSessions) {
+        if (!session->portCombo) continue;
+        const QString current = session->portCombo->currentText();
+        QSignalBlocker blocker(session->portCombo);
+        session->portCombo->clear();
+        session->portCombo->addItems(names);
+        if (!names.contains(session->portName)) session->portCombo->addItem(session->portName);
+        session->portCombo->setCurrentText(current.isEmpty() ? session->portName : current);
+    }
+}
+
+SerialSettings MainWindow::serialSettings(const SerialPortSession *session) const
+{
+    SerialSettings settings;
+    if (!session) return settings;
+    settings.portName = session->portCombo ? session->portCombo->currentText().trimmed() : session->portName;
+    settings.baudRate = session->baudCombo ? session->baudCombo->currentText().toInt() : 115200;
+    const int dataBits = session->dataBitsCombo ? session->dataBitsCombo->currentText().toInt() : 8;
+    settings.dataBits = dataBits == 5 ? QSerialPort::Data5 : dataBits == 6 ? QSerialPort::Data6 : dataBits == 7 ? QSerialPort::Data7 : QSerialPort::Data8;
+    settings.stopBits = session->stopBitsCombo && session->stopBitsCombo->currentText() == QStringLiteral("2") ? QSerialPort::TwoStop :
+                        session->stopBitsCombo && session->stopBitsCombo->currentText() == QStringLiteral("1.5") ? QSerialPort::OneAndHalfStop : QSerialPort::OneStop;
+    const QString parity = session->parityCombo ? session->parityCombo->currentText() : QStringLiteral("None");
+    settings.parity = parity == QStringLiteral("Even") ? QSerialPort::EvenParity : parity == QStringLiteral("Odd") ? QSerialPort::OddParity : parity == QStringLiteral("Mark") ? QSerialPort::MarkParity : parity == QStringLiteral("Space") ? QSerialPort::SpaceParity : QSerialPort::NoParity;
+    return settings;
+}
+
+void MainWindow::addSerialCommand(SerialPortSession *session)
+{
+    if (!session || !session->commandTable) return;
+    const int row = session->commandTable->rowCount();
+    session->commandTable->insertRow(row);
+    auto *number = new QTableWidgetItem(QString::number(row + 1));
+    number->setFlags(number->flags() & ~Qt::ItemIsEditable);
+    number->setTextAlignment(Qt::AlignCenter);
+    session->commandTable->setItem(row, 0, number);
+
+    auto *edit = new QLineEdit(session->commandTable);
+    edit->setMaxLength(16 * 1024 * 1024);
+    edit->setPlaceholderText(QStringLiteral("A0 81 01 00 00 00 00 00 22"));
+    session->commandTable->setCellWidget(row, 1, edit);
+    auto *ascii = new QRadioButton(QStringLiteral("ASCII"));
+    auto *hex = new QRadioButton(QStringLiteral("HEX"));
+    ascii->setChecked(true);
+    auto *modeWidget = new QWidget(session->commandTable);
+    auto *modeLayout = new QHBoxLayout(modeWidget);
+    modeLayout->setContentsMargins(4, 0, 4, 0);
+    modeLayout->addWidget(ascii);
+    modeLayout->addWidget(hex);
+    modeLayout->addStretch();
+    session->commandTable->setCellWidget(row, 2, modeWidget);
+
+    const auto refreshValidation = [this, session, edit]() {
+        int editRow = -1;
+        for (int index = 0; index < session->commandTable->rowCount(); ++index) {
+            if (session->commandTable->cellWidget(index, 1) == edit) {
+                editRow = index;
+                break;
+            }
+        }
+        QWidget *mode = editRow >= 0 ? session->commandTable->cellWidget(editRow, 2) : nullptr;
+        bool hexMode = false;
+        if (mode) {
+            for (auto *button : mode->findChildren<QRadioButton *>()) {
+                if (button->isChecked() && button->text() == QStringLiteral("HEX")) {
+                    hexMode = true;
+                    break;
+                }
+            }
+        }
+        const bool valid = !hexMode || validateHexPayload(edit->text());
+        edit->setStyleSheet(valid ? QStringLiteral("background: #ffffff; color: #000000;") : QStringLiteral("background: #ffe0e0; color: #cc0000;"));
+    };
+    QObject::connect(edit, &QLineEdit::textChanged, this, refreshValidation);
+    QObject::connect(ascii, &QRadioButton::toggled, this, refreshValidation);
+    QObject::connect(hex, &QRadioButton::toggled, this, refreshValidation);
+}
+
+void MainWindow::removeSerialCommand(SerialPortSession *session)
+{
+    if (!session || !session->commandTable || session->commandTable->rowCount() <= 1) return;
+    int row = session->commandTable->currentRow();
+    if (row < 0) row = session->commandTable->rowCount() - 1;
+    session->commandTable->removeRow(row);
+    for (int index = row; index < session->commandTable->rowCount(); ++index) {
+        if (session->commandTable->item(index, 0)) session->commandTable->item(index, 0)->setText(QString::number(index + 1));
+    }
+}
+
+QList<CommandItem> MainWindow::collectSerialCommands(const SerialPortSession *session) const
+{
+    QList<CommandItem> commands;
+    if (!session || !session->commandTable) return commands;
+    for (int row = 0; row < session->commandTable->rowCount(); ++row) {
+        auto *edit = qobject_cast<QLineEdit *>(session->commandTable->cellWidget(row, 1));
+        if (!edit || edit->text().trimmed().isEmpty()) continue;
+        bool hexMode = false;
+        if (auto *mode = session->commandTable->cellWidget(row, 2)) {
+            for (auto *button : mode->findChildren<QRadioButton *>()) {
+                if (button->isChecked() && button->text() == QStringLiteral("HEX")) {
+                    hexMode = true;
+                    break;
+                }
+            }
+        }
+        CommandItem item;
+        item.text = edit->text();
+        item.hexMode = hexMode;
+        item.valid = !hexMode || validateHexPayload(item.text);
+        commands.append(item);
+    }
+    return commands;
 }
 
 bool MainWindow::isTcpMode() const
@@ -772,6 +1116,369 @@ void MainWindow::updateTcpConnectionState()
     ui->pushButtonConnect->setEnabled(!m_testRunning && connecting == 0 &&
                                       (m_tcpSessions.isEmpty() || connected != m_tcpSessions.size()));
     ui->pushButtonDisconnect->setEnabled(connected > 0 || connecting > 0);
+}
+
+void MainWindow::connectSerialPorts()
+{
+    if (m_serialSessions.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("Add at least one serial port first"));
+        return;
+    }
+
+    destroySerialWorkers();
+    int started = 0;
+    for (SerialPortSession *session : m_serialSessions) {
+        const SerialSettings settings = serialSettings(session);
+        if (settings.portName.isEmpty()) {
+            appendLog(LogLevel::Error, QStringLiteral("[%1] Invalid serial port name").arg(session->portName));
+            continue;
+        }
+        auto *thread = new QThread(this);
+        auto *worker = new SerialClientWorker(settings);
+        session->thread = thread;
+        session->worker = worker;
+        session->connecting = true;
+        worker->moveToThread(thread);
+        QObject::connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+        QObject::connect(worker, &SerialClientWorker::signalConnected, this, [this, session]() {
+            if (m_serialSessions.value(session->portName) != session) return;
+            session->connected = true;
+            session->connecting = false;
+            if (session->portCombo) session->portCombo->setEnabled(false);
+            updateSerialPortRow(session, QStringLiteral("Connected"));
+            appendLog(LogLevel::Info, QStringLiteral("[%1] Connected").arg(session->portName));
+            updateSerialConnectionState();
+        });
+        QObject::connect(worker, &SerialClientWorker::signalDisconnected, this, [this, session]() {
+            if (m_serialSessions.value(session->portName) != session) return;
+            session->connected = false;
+            session->connecting = false;
+            if (session->portCombo) session->portCombo->setEnabled(true);
+            session->oneShotRunning = false;
+            session->oneShotCommands.clear();
+            if (session->sendTimer) session->sendTimer->stop();
+            updateSerialPortRow(session, QStringLiteral("Disconnected"));
+            appendLog(LogLevel::Info, QStringLiteral("[%1] Disconnected").arg(session->portName));
+            if (session->testRunning) {
+                if (session->sendTimer) session->sendTimer->stop();
+                session->testRunning = false;
+                session->finishingAfterLimit = true;
+                const QVector<PacketInfo> lost = session->statistics.markAllPendingLost();
+                for (const PacketInfo &packet : lost) appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 lost after disconnect").arg(session->portName).arg(packet.id));
+                bool anyRunning = false;
+                for (const SerialPortSession *other : m_serialSessions) anyRunning = anyRunning || other->testRunning;
+                m_testRunning = anyRunning;
+            }
+            updateSerialConnectionState();
+        });
+        QObject::connect(worker, &SerialClientWorker::signalDataReceived, this, [this, session](const QByteArray &data) {
+            if (m_serialSessions.value(session->portName) != session) return;
+            PacketInfo packet;
+            if (session->statistics.recordReceive(data, &packet)) {
+                appendLog(LogLevel::Rx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat)), packet.elapsedMs);
+            } else {
+                appendLog(LogLevel::Rx, QStringLiteral("[%1] Unmatched response %2").arg(session->portName).arg(payloadToDisplay(data)));
+            }
+            updateSerialSessionStats(session);
+            scheduleStatsRefresh();
+        });
+        QObject::connect(worker, &SerialClientWorker::signalErrorOccurred, this, [this, session](const QString &message) {
+            if (m_serialSessions.value(session->portName) != session) return;
+            appendLog(LogLevel::Error, QStringLiteral("[%1] %2").arg(session->portName, message));
+            if (session->connecting) {
+                session->connecting = false;
+                updateSerialPortRow(session, QStringLiteral("Connection failed"));
+                updateSerialConnectionState();
+            }
+        });
+        thread->start();
+        QMetaObject::invokeMethod(worker, "connect", Qt::QueuedConnection);
+        updateSerialPortRow(session, QStringLiteral("Connecting"));
+        ++started;
+    }
+    appendLog(LogLevel::Info, QStringLiteral("Connecting to %1 serial ports").arg(started));
+    updateSerialConnectionState();
+}
+
+void MainWindow::disconnectSerialPorts()
+{
+    destroySerialWorkers();
+    for (SerialPortSession *session : m_serialSessions) {
+        session->connected = false;
+        session->connecting = false;
+        if (session->portCombo) session->portCombo->setEnabled(true);
+        updateSerialPortRow(session, QStringLiteral("Disconnected"));
+    }
+    updateSerialConnectionState();
+    appendLog(LogLevel::Info, QStringLiteral("All serial connections closed"));
+}
+
+void MainWindow::destroySerialWorker(SerialPortSession *session)
+{
+    if (!session) return;
+    if (session->sendTimer) session->sendTimer->stop();
+    session->oneShotCommands.clear();
+    session->oneShotRunning = false;
+    if (!session->thread) {
+        session->worker = nullptr;
+        session->connected = false;
+        session->connecting = false;
+        return;
+    }
+    if (session->worker) {
+        QObject::disconnect(session->worker, nullptr, this, nullptr);
+        if (session->thread->isRunning()) {
+            QMetaObject::invokeMethod(session->worker, "disconnect", Qt::BlockingQueuedConnection);
+        }
+    }
+    session->thread->quit();
+    session->thread->wait(3000);
+    delete session->thread;
+    session->thread = nullptr;
+    session->worker = nullptr;
+    session->connected = false;
+    session->connecting = false;
+}
+
+void MainWindow::destroySerialWorkers()
+{
+    for (SerialPortSession *session : m_serialSessions) destroySerialWorker(session);
+}
+
+void MainWindow::updateSerialPortRow(SerialPortSession *session, const QString &state)
+{
+    if (!session || !m_serialPortTable) return;
+    for (int row = 0; row < m_serialPortTable->rowCount(); ++row) {
+        if (m_serialPortTable->item(row, 0) && m_serialPortTable->item(row, 0)->text() == session->portName) {
+            m_serialPortTable->item(row, 1)->setText(state);
+            return;
+        }
+    }
+}
+
+void MainWindow::updateSerialConnectionState()
+{
+    int connected = 0;
+    int connecting = 0;
+    for (const SerialPortSession *session : m_serialSessions) {
+        connected += session->connected ? 1 : 0;
+        connecting += session->connecting ? 1 : 0;
+    }
+    m_connected = connected == m_serialSessions.size() && !m_serialSessions.isEmpty();
+    QString state = QStringLiteral("Disconnected");
+    QString color = QStringLiteral("#b64d4d");
+    if (m_connected) {
+        state = QStringLiteral("Connected %1/%2").arg(connected).arg(m_serialSessions.size());
+        color = QStringLiteral("#19b982");
+    } else if (connecting > 0) {
+        state = QStringLiteral("Connecting %1/%2").arg(connected).arg(m_serialSessions.size());
+        color = QStringLiteral("#d7a72f");
+    } else if (connected > 0) {
+        state = QStringLiteral("Partial %1/%2").arg(connected).arg(m_serialSessions.size());
+        color = QStringLiteral("#d7a72f");
+    }
+    ui->labelConnectionState->setText(state);
+    ui->frameLed->setStyleSheet(QStringLiteral("background:%1; border:1px solid rgba(255,255,255,0.35); border-radius:8px;").arg(color));
+    ui->pushButtonConnect->setEnabled(!m_testRunning && connecting == 0 && connected != m_serialSessions.size());
+    ui->pushButtonDisconnect->setEnabled(connected > 0 || connecting > 0);
+}
+
+void MainWindow::sendAllSerialPort(SerialPortSession *session)
+{
+    if (!session || session->testRunning || session->oneShotRunning) return;
+    if (!session->connected || !session->worker) {
+        appendLog(LogLevel::Error, QStringLiteral("[%1] Not connected").arg(session ? session->portName : QStringLiteral("?")));
+        return;
+    }
+    const QList<CommandItem> commands = collectSerialCommands(session);
+    if (!validateCommands(commands)) return;
+    session->oneShotCommands.clear();
+    for (const CommandItem &item : commands) session->oneShotCommands.enqueue(item);
+    session->oneShotRunning = true;
+    session->nextOneShotDeadlineMs = 0;
+    session->sendClock.start();
+    appendLog(LogLevel::Info, QStringLiteral("[%1] Sending all commands").arg(session->portName));
+    sendNextOneShotSerialPacket(session);
+}
+
+void MainWindow::sendNextOneShotSerialPacket(SerialPortSession *session)
+{
+    if (!session || !session->oneShotRunning || !session->worker || !session->connected) return;
+    if (session->oneShotCommands.isEmpty()) {
+        session->oneShotRunning = false;
+        session->nextOneShotDeadlineMs = 0;
+        appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
+        return;
+    }
+    const CommandItem item = session->oneShotCommands.dequeue();
+    const QByteArray payload = item.hexMode ? QByteArray::fromHex(item.text.simplified().remove(QRegularExpression(QStringLiteral("\\s+"))).toLatin1()) : item.text.toUtf8();
+    if (!payload.isEmpty()) {
+        const QString format = item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII");
+        const PacketInfo packet = session->statistics.recordSend(payload, format);
+        appendLog(LogLevel::Tx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(item.text));
+        QMetaObject::invokeMethod(session->worker, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+        updateSerialSessionStats(session);
+        scheduleStatsRefresh();
+    }
+    if (session->oneShotCommands.isEmpty()) {
+        session->oneShotRunning = false;
+        session->nextOneShotDeadlineMs = 0;
+        appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
+    } else {
+        scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
+    }
+}
+
+void MainWindow::scheduleNextOneShotSerialPacket(SerialPortSession *session, int intervalMs)
+{
+    if (!session || !session->oneShotRunning) return;
+    const qint64 now = session->sendClock.elapsed();
+    if (session->nextOneShotDeadlineMs == 0) session->nextOneShotDeadlineMs = now + intervalMs;
+    else session->nextOneShotDeadlineMs += intervalMs;
+    if (session->nextOneShotDeadlineMs <= now) session->nextOneShotDeadlineMs = now + intervalMs;
+    if (!session->sendTimer) {
+        session->sendTimer = new QTimer(this);
+        session->sendTimer->setSingleShot(true);
+        session->sendTimer->setTimerType(Qt::PreciseTimer);
+        QObject::connect(session->sendTimer, &QTimer::timeout, this, [this, session]() {
+            if (session->oneShotRunning) sendNextOneShotSerialPacket(session);
+            else sendNextSerialPacket(session);
+        });
+    }
+    session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextOneShotDeadlineMs - session->sendClock.elapsed())));
+}
+
+void MainWindow::startSerialTest()
+{
+    if (m_serialSessions.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("Add at least one serial port first"));
+        return;
+    }
+    int active = 0;
+    for (SerialPortSession *session : m_serialSessions) {
+        if (!session->connected || !session->worker) {
+            appendLog(LogLevel::Error, QStringLiteral("[%1] Skipped: not connected").arg(session->portName));
+            continue;
+        }
+        const QList<CommandItem> commands = collectSerialCommands(session);
+        if (!validateCommands(commands)) continue;
+        session->statistics.reset();
+        session->currentCommandIndex = 0;
+        session->perCommandSendCount = QVector<int>(commands.size(), 0);
+        session->testRunning = true;
+        session->finishingAfterLimit = false;
+        session->sendClock.start();
+        session->nextSendDeadlineMs = 0;
+        ++active;
+    }
+    if (active == 0) {
+        appendLog(LogLevel::Error, QStringLiteral("No connected serial port is ready"));
+        return;
+    }
+    ui->textEditLog->clear();
+    m_testRunning = true;
+    m_finishingAfterLimit = false;
+    ui->pushButtonStart->setEnabled(false);
+    ui->pushButtonStop->setEnabled(true);
+    ui->pushButtonConnect->setEnabled(false);
+    ui->comboBoxMode->setEnabled(false);
+    if (m_serialPortBox) m_serialPortBox->setEnabled(false);
+    m_timeoutTimer->start();
+    appendLog(LogLevel::Info, QStringLiteral("Multi-serial test started: %1 ports, interval %2 ms, timeout %3 ms").arg(active).arg(ui->spinBoxInterval->value()).arg(ui->spinBoxTimeout->value()));
+    for (SerialPortSession *session : m_serialSessions) if (session->testRunning) sendNextSerialPacket(session);
+}
+
+void MainWindow::stopSerialTest(bool manualStop)
+{
+    bool anyRunning = m_testRunning;
+    for (SerialPortSession *session : m_serialSessions) anyRunning = anyRunning || session->testRunning;
+    if (!anyRunning) return;
+    for (SerialPortSession *session : m_serialSessions) {
+        if (session->sendTimer) session->sendTimer->stop();
+        session->oneShotRunning = false;
+        session->testRunning = false;
+        session->finishingAfterLimit = false;
+        const QVector<PacketInfo> lost = session->statistics.markAllPendingLost();
+        for (const PacketInfo &packet : lost) appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 lost").arg(session->portName).arg(packet.id));
+    }
+    m_testRunning = false;
+    m_finishingAfterLimit = false;
+    m_timeoutTimer->stop();
+    if (manualStop) appendLog(LogLevel::Info, QStringLiteral("Multi-serial test stopped manually"));
+    finalizeSerialReport();
+    scheduleStatsRefresh();
+    ui->pushButtonStart->setEnabled(true);
+    ui->pushButtonStop->setEnabled(false);
+    ui->comboBoxMode->setEnabled(true);
+    if (m_serialPortBox) m_serialPortBox->setEnabled(true);
+    updateSerialConnectionState();
+}
+
+void MainWindow::sendNextSerialPacket(SerialPortSession *session)
+{
+    if (!session || !session->testRunning || !session->worker || !session->connected) return;
+    const QList<CommandItem> commands = collectSerialCommands(session);
+    if (commands.isEmpty()) {
+        session->finishingAfterLimit = true;
+        return;
+    }
+    const int targetCount = ui->spinBoxSendCount->value();
+    if (session->perCommandSendCount.size() != commands.size()) session->perCommandSendCount = QVector<int>(commands.size(), 0);
+    int checked = 0;
+    while (checked < commands.size() && targetCount > 0 && session->perCommandSendCount.value(session->currentCommandIndex) >= targetCount) {
+        session->currentCommandIndex = (session->currentCommandIndex + 1) % commands.size();
+        ++checked;
+    }
+    if (checked >= commands.size()) {
+        session->finishingAfterLimit = true;
+        checkSerialTimeouts();
+        return;
+    }
+    const CommandItem &item = commands.at(session->currentCommandIndex);
+    const QByteArray payload = item.hexMode ? QByteArray::fromHex(item.text.simplified().remove(QRegularExpression(QStringLiteral("\\s+"))).toLatin1()) : item.text.toUtf8();
+    if (!payload.isEmpty()) {
+        const PacketInfo packet = session->statistics.recordSend(payload, item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII"));
+        ++session->perCommandSendCount[session->currentCommandIndex];
+        appendLog(LogLevel::Tx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(item.text));
+        QMetaObject::invokeMethod(session->worker, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+        updateSerialSessionStats(session);
+        scheduleStatsRefresh();
+    }
+    session->currentCommandIndex = (session->currentCommandIndex + 1) % commands.size();
+    scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
+}
+
+void MainWindow::scheduleNextSerialPacket(SerialPortSession *session, int intervalMs)
+{
+    if (!session || !session->testRunning || session->finishingAfterLimit) return;
+    const qint64 now = session->sendClock.elapsed();
+    if (session->nextSendDeadlineMs == 0) session->nextSendDeadlineMs = now + intervalMs;
+    else session->nextSendDeadlineMs += intervalMs;
+    if (session->nextSendDeadlineMs <= now) session->nextSendDeadlineMs = now + intervalMs;
+    if (!session->sendTimer) {
+        session->sendTimer = new QTimer(this);
+        session->sendTimer->setSingleShot(true);
+        session->sendTimer->setTimerType(Qt::PreciseTimer);
+        QObject::connect(session->sendTimer, &QTimer::timeout, this, [this, session]() {
+            if (session->oneShotRunning) sendNextOneShotSerialPacket(session);
+            else sendNextSerialPacket(session);
+        });
+    }
+    session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextSendDeadlineMs - session->sendClock.elapsed())));
+}
+
+void MainWindow::checkSerialTimeouts()
+{
+    if (!m_testRunning) return;
+    bool allFinished = true;
+    for (SerialPortSession *session : m_serialSessions) {
+        const QVector<PacketInfo> timedOut = session->statistics.markTimeouts(ui->spinBoxTimeout->value());
+        for (const PacketInfo &packet : timedOut) appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 timeout/lost").arg(session->portName).arg(packet.id), packet.elapsedMs);
+        if (!(session->finishingAfterLimit && !session->statistics.hasPendingPackets()) && session->testRunning) allFinished = false;
+        updateSerialSessionStats(session);
+    }
+    if (allFinished) stopSerialTest(false);
+    scheduleStatsRefresh();
 }
 
 void MainWindow::slotSendSelectedTcpPort()
@@ -1005,16 +1712,7 @@ void MainWindow::slotConnectClicked()
         connectTcpPorts();
         return;
     }
-
-    destroyWorker();
-    createWorker();
-    if (!m_workerObject) {
-        return;
-    }
-
-    setConnectionState(ConnectionState::Connecting);
-    appendLog(LogLevel::Info, QStringLiteral("Connecting: %1").arg(currentConfigDescription()));
-    QMetaObject::invokeMethod(m_workerObject, "connect", Qt::QueuedConnection);
+    connectSerialPorts();
 }
 
 void MainWindow::slotDisconnectClicked()
@@ -1024,11 +1722,8 @@ void MainWindow::slotDisconnectClicked()
         disconnectTcpPorts();
         return;
     }
-
-    stopTest(true);
-    destroyWorker();
-    setConnectionState(ConnectionState::Disconnected);
-    appendLog(LogLevel::Info, QStringLiteral("Connection closed"));
+    stopSerialTest(true);
+    disconnectSerialPorts();
 }
 
 void MainWindow::slotStartClicked()
@@ -1037,48 +1732,7 @@ void MainWindow::slotStartClicked()
         startTcpTest();
         return;
     }
-
-    if (!m_connected) {
-        appendLog(LogLevel::Error, QStringLiteral("Please connect first"));
-        return;
-    }
-
-    const QList<CommandItem> commands = collectCommands();
-    if (commands.isEmpty()) {
-        appendLog(LogLevel::Error, QStringLiteral("No valid commands"));
-        return;
-    }
-
-    for (const CommandItem &item : commands) {
-        if (!item.valid) {
-            appendLog(LogLevel::Error, QStringLiteral("Invalid command syntax, please fix highlighted cells"));
-            return;
-        }
-    }
-
-    m_currentCommandIndex = 0;
-    m_totalCommands = commands.size();
-    m_perCommandSendCount = QVector<int>(commands.size(), 0);
-
-    ui->textEditLog->clear();
-    m_statistics.reset();
-    m_testRunning = true;
-    m_finishingAfterLimit = false;
-    ui->pushButtonStart->setEnabled(false);
-    ui->pushButtonStop->setEnabled(true);
-    ui->pushButtonConnect->setEnabled(false);
-    ui->comboBoxMode->setEnabled(false);
-    m_timeoutTimer->start();
-
-    appendLog(LogLevel::Info, QStringLiteral("Test started: %1, interval %2 ms, count %3, %4 commands")
-                                 .arg(currentModeDescription())
-                                 .arg(ui->spinBoxInterval->value())
-                                 .arg(ui->spinBoxSendCount->value() == 0 ? QStringLiteral("unlimited") : QString::number(ui->spinBoxSendCount->value()))
-                                 .arg(commands.size()));
-
-    m_sendClock.start();
-    m_nextSendDeadlineMs = 0;
-    slotSendNextPacket();
+    startSerialTest();
 }
 
 void MainWindow::slotStopClicked()
@@ -1087,7 +1741,7 @@ void MainWindow::slotStopClicked()
         stopTcpTest(true);
         return;
     }
-    stopTest(true);
+    stopSerialTest(true);
 }
 
 void MainWindow::slotSendNextPacket()
@@ -1199,20 +1853,7 @@ void MainWindow::slotCheckTimeouts()
         checkTcpTimeouts();
         return;
     }
-
-    if (!m_testRunning) {
-        return;
-    }
-
-    const qint64 timeoutMs = ui->spinBoxTimeout->value();
-    const QVector<PacketInfo> timedOut = m_statistics.markTimeouts(timeoutMs);
-    for (const PacketInfo &packet : timedOut) {
-        appendLog(LogLevel::Error, QStringLiteral("#%1 timeout/lost").arg(packet.id), packet.elapsedMs);
-    }
-    if (!timedOut.isEmpty()) {
-        scheduleStatsRefresh();
-    }
-    checkFinishAfterLimit();
+    checkSerialTimeouts();
 }
 
 void MainWindow::slotWorkerConnected()
@@ -1402,6 +2043,58 @@ void MainWindow::updateStatsView()
         return;
     }
 
+    if (!isTcpMode()) {
+        StatisticsSnapshot snap;
+        QVector<qint64> elapsedValues;
+        qint64 sum = 0;
+        for (SerialPortSession *session : m_serialSessions) {
+            updateSerialSessionStats(session);
+            for (const PacketInfo &packet : session->statistics.packets()) {
+                ++snap.totalSent;
+                if (packet.status == PacketInfo::Status::Success) {
+                    ++snap.successReceived;
+                    elapsedValues.push_back(packet.elapsedMs);
+                    sum += packet.elapsedMs;
+                    snap.minElapsedMs = snap.successReceived == 1 ? packet.elapsedMs : qMin(snap.minElapsedMs, packet.elapsedMs);
+                    snap.maxElapsedMs = qMax(snap.maxElapsedMs, packet.elapsedMs);
+                } else if (packet.status == PacketInfo::Status::Timeout) {
+                    ++snap.lostPackets;
+                }
+            }
+        }
+        if (snap.totalSent > 0) snap.successRate = static_cast<double>(snap.successReceived) * 100.0 / snap.totalSent;
+        if (!elapsedValues.isEmpty()) {
+            snap.averageElapsedMs = static_cast<double>(sum) / elapsedValues.size();
+            std::sort(elapsedValues.begin(), elapsedValues.end());
+            const auto percentile = [&elapsedValues](double p) {
+                const double rank = p * (elapsedValues.size() - 1);
+                const int low = static_cast<int>(rank);
+                const int high = qMin(low + 1, elapsedValues.size() - 1);
+                const double fraction = rank - low;
+                return elapsedValues[low] * (1.0 - fraction) + elapsedValues[high] * fraction;
+            };
+            snap.p50Ms = percentile(0.50);
+            snap.p90Ms = percentile(0.90);
+            snap.p95Ms = percentile(0.95);
+            snap.p99Ms = percentile(0.99);
+        }
+        ui->labelTotalSentValue->setText(QString::number(snap.totalSent));
+        ui->labelSuccessValue->setText(QString::number(snap.successReceived));
+        ui->labelLostValue->setText(QString::number(snap.lostPackets));
+        ui->labelRateValue->setText(QStringLiteral("%1%").arg(snap.successRate, 0, 'f', 2));
+        ui->labelAverageValue->setText(QStringLiteral("%1 ms").arg(snap.averageElapsedMs, 0, 'f', 3));
+        ui->labelMaxValue->setText(QStringLiteral("%1 ms").arg(snap.maxElapsedMs));
+        ui->labelMinValue->setText(QStringLiteral("%1 ms").arg(snap.minElapsedMs));
+        auto setSerialAggregateLabel = [&](const QString &name, double value) {
+            if (auto *label = ui->groupBoxStats->findChild<QLabel *>(name)) label->setText(QStringLiteral("%1 ms").arg(value, 0, 'f', 3));
+        };
+        setSerialAggregateLabel(QStringLiteral("labelP50Value"), snap.p50Ms);
+        setSerialAggregateLabel(QStringLiteral("labelP90Value"), snap.p90Ms);
+        setSerialAggregateLabel(QStringLiteral("labelP95Value"), snap.p95Ms);
+        setSerialAggregateLabel(QStringLiteral("labelP99Value"), snap.p99Ms);
+        return;
+    }
+
     const StatisticsSnapshot snap = m_statistics.snapshot();
     ui->labelTotalSentValue->setText(QString::number(snap.totalSent));
     ui->labelSuccessValue->setText(QString::number(snap.successReceived));
@@ -1420,6 +2113,22 @@ void MainWindow::updateStatsView()
     setLabel(QStringLiteral("labelP90Value"), QStringLiteral("%1 ms").arg(snap.p90Ms, 0, 'f', 3));
     setLabel(QStringLiteral("labelP95Value"), QStringLiteral("%1 ms").arg(snap.p95Ms, 0, 'f', 3));
     setLabel(QStringLiteral("labelP99Value"), QStringLiteral("%1 ms").arg(snap.p99Ms, 0, 'f', 3));
+}
+
+void MainWindow::updateSerialSessionStats(SerialPortSession *session)
+{
+    if (!session || !session->commandPage) return;
+    const StatisticsSnapshot snap = session->statistics.snapshot();
+    const auto setValue = [session](const QString &name, const QString &value) {
+        if (auto *label = session->commandPage->findChild<QLabel *>(name)) label->setText(value);
+    };
+    setValue(QStringLiteral("serialTotalValue"), QString::number(snap.totalSent));
+    setValue(QStringLiteral("serialSuccessValue"), QString::number(snap.successReceived));
+    setValue(QStringLiteral("serialLostValue"), QString::number(snap.lostPackets));
+    setValue(QStringLiteral("serialP50Value"), QStringLiteral("%1 ms").arg(snap.p50Ms, 0, 'f', 3));
+    setValue(QStringLiteral("serialP90Value"), QStringLiteral("%1 ms").arg(snap.p90Ms, 0, 'f', 3));
+    setValue(QStringLiteral("serialP95Value"), QStringLiteral("%1 ms").arg(snap.p95Ms, 0, 'f', 3));
+    setValue(QStringLiteral("serialP99Value"), QStringLiteral("%1 ms").arg(snap.p99Ms, 0, 'f', 3));
 }
 
 void MainWindow::setupStatsLabels()
@@ -1533,6 +2242,8 @@ void MainWindow::finalizeTestReport()
         finalizeTcpReport();
         return;
     }
+    finalizeSerialReport();
+    return;
 
     const QString fileName = QStringLiteral("CommReport_%1.txt")
                                  .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
@@ -1620,6 +2331,56 @@ void MainWindow::finalizeTestReport()
 
     file.close();
     appendLog(LogLevel::Info, QStringLiteral("Test report saved: %1").arg(filePath));
+}
+
+void MainWindow::finalizeSerialReport()
+{
+    const QString fileName = QStringLiteral("CommReport_Serial_%1.txt").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+    QDir logDir(QDir::current().filePath(QStringLiteral("Log")));
+    if (!logDir.exists() && !logDir.mkpath(QStringLiteral("."))) {
+        appendLog(LogLevel::Error, QStringLiteral("Failed to create log directory: %1").arg(logDir.absolutePath()));
+        return;
+    }
+    QFile file(logDir.filePath(fileName));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        appendLog(LogLevel::Error, QStringLiteral("Failed to write report: %1").arg(file.errorString()));
+        return;
+    }
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+    out << QStringLiteral("CommBench Pro Multi-Serial Test Report\n");
+    out << QStringLiteral("=====================================\n\n");
+    out << QStringLiteral("Interval: %1 ms\n").arg(ui->spinBoxInterval->value());
+    out << QStringLiteral("Timeout: %1 ms\n").arg(ui->spinBoxTimeout->value());
+    out << QStringLiteral("Send Count: %1\n\n").arg(ui->spinBoxSendCount->value() == 0 ? QStringLiteral("unlimited") : QString::number(ui->spinBoxSendCount->value()));
+    for (const SerialPortSession *session : m_serialSessions) {
+        out << QStringLiteral("--- Serial Port %1 ---\n").arg(session->portName);
+        const SerialSettings settings = serialSettings(session);
+        out << QStringLiteral("Baud: %1 | Data: %2 | Stop: %3 | Parity: %4\n").arg(settings.baudRate).arg(session->dataBitsCombo ? session->dataBitsCombo->currentText() : QStringLiteral("8")).arg(session->stopBitsCombo ? session->stopBitsCombo->currentText() : QStringLiteral("1")).arg(session->parityCombo ? session->parityCombo->currentText() : QStringLiteral("None"));
+        int commandNumber = 1;
+        for (const CommandItem &item : collectSerialCommands(session)) {
+            QString text = item.text;
+            text.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
+            text.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+            out << QStringLiteral("Command %1 | Format: %2 | Data: %3\n").arg(commandNumber++).arg(item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII")).arg(text);
+        }
+        const StatisticsSnapshot snap = session->statistics.snapshot();
+        out << QStringLiteral("Total Sent: %1\nSuccess RX: %2\nLost: %3\nSuccess Rate: %4%\nAverage: %5 ms\nMax: %6 ms\nMin: %7 ms\nP50: %8 ms\nP90: %9 ms\nP95: %10 ms\nP99: %11 ms\n").arg(snap.totalSent).arg(snap.successReceived).arg(snap.lostPackets).arg(snap.successRate, 0, 'f', 2).arg(snap.averageElapsedMs, 0, 'f', 3).arg(snap.maxElapsedMs).arg(snap.minElapsedMs).arg(snap.p50Ms, 0, 'f', 3).arg(snap.p90Ms, 0, 'f', 3).arg(snap.p95Ms, 0, 'f', 3).arg(snap.p99Ms, 0, 'f', 3);
+        out << QStringLiteral("Packet Details:\n");
+        for (const PacketInfo &packet : session->statistics.packets()) {
+            QString txData = packet.txFormat == QStringLiteral("HEX") ? QString::fromLatin1(packet.txPayload.toHex(' ').toUpper()) : QString::fromUtf8(packet.txPayload);
+            txData.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
+            txData.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+            QString rxData = packet.txFormat == QStringLiteral("HEX") ? QString::fromLatin1(packet.rxPayload.toHex(' ').toUpper()) : QString::fromUtf8(packet.rxPayload);
+            rxData.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
+            rxData.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+            const QString status = packet.status == PacketInfo::Status::Success ? QStringLiteral("SUCCESS") : packet.status == PacketInfo::Status::Timeout ? QStringLiteral("TIMEOUT") : QStringLiteral("PENDING");
+            out << QStringLiteral("[%1] #%2 %3 %4 ms | Format: %5 | TX Data: %6 | RX Data: %7\n").arg(session->portName).arg(packet.id).arg(status).arg(packet.elapsedMs >= 0 ? QString::number(packet.elapsedMs) : QStringLiteral("-")).arg(packet.txFormat.isEmpty() ? QStringLiteral("UNKNOWN") : packet.txFormat).arg(txData).arg(rxData.isEmpty() ? QStringLiteral("-") : rxData);
+        }
+        out << QLatin1Char('\n');
+    }
+    file.close();
+    appendLog(LogLevel::Info, QStringLiteral("Multi-serial report saved: %1").arg(file.fileName()));
 }
 
 void MainWindow::finalizeTcpReport()

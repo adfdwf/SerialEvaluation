@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include "namespace.h"
+#include "serialclientworker.h"
 #include "statisticsmanager.h"
 
 #include <QByteArray>
@@ -21,6 +22,8 @@
 class QTableWidget;
 class QTabWidget;
 class QPushButton;
+class QComboBox;
+class QGroupBox;
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -45,6 +48,32 @@ struct TcpPortSession {
     QTimer *sendTimer = nullptr;
     QTableWidget *commandTable = nullptr;
     QWidget *commandPage = nullptr;
+    StatisticsManager statistics;
+    QElapsedTimer sendClock;
+    qint64 nextSendDeadlineMs = 0;
+    bool testRunning = false;
+    bool finishingAfterLimit = false;
+    int currentCommandIndex = 0;
+    QVector<int> perCommandSendCount;
+    QQueue<CommandItem> oneShotCommands;
+    bool oneShotRunning = false;
+    qint64 nextOneShotDeadlineMs = 0;
+};
+
+struct SerialPortSession {
+    QString portName;
+    QThread *thread = nullptr;
+    SerialClientWorker *worker = nullptr;
+    bool connected = false;
+    bool connecting = false;
+    QTimer *sendTimer = nullptr;
+    QTableWidget *commandTable = nullptr;
+    QWidget *commandPage = nullptr;
+    QComboBox *portCombo = nullptr;
+    QComboBox *baudCombo = nullptr;
+    QComboBox *dataBitsCombo = nullptr;
+    QComboBox *stopBitsCombo = nullptr;
+    QComboBox *parityCombo = nullptr;
     StatisticsManager statistics;
     QElapsedTimer sendClock;
     qint64 nextSendDeadlineMs = 0;
@@ -87,6 +116,9 @@ private Q_SLOTS:
     void slotRemoveTcpPort();
     void slotSendSelectedTcpPort();
     void slotSendAllTcpPorts();
+    void slotAddSerialPort();
+    void slotRemoveSerialPort();
+    void slotSendAllSerialPorts();
 
 private:
     enum class ConnectionState {
@@ -151,6 +183,30 @@ private:
     void updateTcpPortRow(TcpPortSession *session, const QString &state);
     void updateTcpConnectionState();
     void finalizeTcpReport();
+    void setupSerialPortUi();
+    void addSerialPort(const QString &portName);
+    void removeSerialPort(const QString &portName);
+    void addSerialCommand(SerialPortSession *session);
+    void removeSerialCommand(SerialPortSession *session);
+    QList<CommandItem> collectSerialCommands(const SerialPortSession *session) const;
+    void connectSerialPorts();
+    void disconnectSerialPorts();
+    void destroySerialWorker(SerialPortSession *session);
+    void destroySerialWorkers();
+    SerialSettings serialSettings(const SerialPortSession *session) const;
+    void updateSerialPortRow(SerialPortSession *session, const QString &state);
+    void updateSerialConnectionState();
+    void sendAllSerialPort(SerialPortSession *session);
+    void sendNextOneShotSerialPacket(SerialPortSession *session);
+    void scheduleNextOneShotSerialPacket(SerialPortSession *session, int intervalMs);
+    void startSerialTest();
+    void stopSerialTest(bool manualStop);
+    void sendNextSerialPacket(SerialPortSession *session);
+    void scheduleNextSerialPacket(SerialPortSession *session, int intervalMs);
+    void checkSerialTimeouts();
+    void updateSerialSessionStats(SerialPortSession *session);
+    void finalizeSerialReport();
+    void refreshSerialPortChoices();
 
 private:
     Ui::MainWindow *ui = nullptr;
@@ -175,6 +231,15 @@ private:
     QPushButton *m_tcpAddPortButton = nullptr;
     QPushButton *m_tcpRemovePortButton = nullptr;
     QPushButton *m_tcpSendAllButton = nullptr;
+    QHash<QString, SerialPortSession *> m_serialSessions;
+    QGroupBox *m_serialPortBox = nullptr;
+    QTableWidget *m_serialPortTable = nullptr;
+    QTabWidget *m_serialCommandTabs = nullptr;
+    QPushButton *m_serialAddPortButton = nullptr;
+    QPushButton *m_serialRemovePortButton = nullptr;
+    QPushButton *m_serialRefreshButton = nullptr;
+    QPushButton *m_serialSendAllButton = nullptr;
+    QTimer *m_serialHotplugTimer = nullptr;
 };
 
 END_NAMESPACE_CIQTEK
