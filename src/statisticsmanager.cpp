@@ -20,13 +20,14 @@ void StatisticsManager::reset()
     m_indexById.clear();
 }
 
-PacketInfo StatisticsManager::recordSend(const QByteArray &payload)
+PacketInfo StatisticsManager::recordSend(const QByteArray &payload, const QString &format)
 {
     PacketInfo packet;
     packet.id = m_nextId++;
     packet.sentAt = QDateTime::currentDateTime();
     packet.sentTickMs = m_timer.elapsed();
     packet.txPayload = payload;
+    packet.txFormat = format;
 
     m_indexById.insert(packet.id, m_packets.size());
     m_packets.push_back(packet);
