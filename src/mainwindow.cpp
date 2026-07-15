@@ -1,4 +1,4 @@
-﻿#include "mainwindow.h"
+#include "mainwindow.h"
 #include "serialclientworker.h"
 #include "tcpclientworker.h"
 #include "ui_mainwindow.h"
@@ -16,12 +16,12 @@
 #include <QGroupBox>
 #include <QGridLayout>
 #include <QHostAddress>
-#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSerialPortInfo>
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QRadioButton>
+#include <QRegularExpression>
 #include <QTextStream>
 #include <QVBoxLayout>
 
@@ -85,7 +85,8 @@ void MainWindow::setupUiLogic()
     m_sendTimer->setSingleShot(true);
     m_sendTimer->setTimerType(Qt::PreciseTimer);
     m_timeoutTimer = new QTimer(this);
-    m_timeoutTimer->setInterval(200);
+    // 以较小周期检查统计超时，使 recv 超时后能及时放行下一条任务。
+    m_timeoutTimer->setInterval(10);
     m_statsTimer = new QTimer(this);
     m_statsTimer->setInterval(100);
     QObject::connect(m_statsTimer, &QTimer::timeout, this, &MainWindow::updateStatsView);
@@ -120,6 +121,8 @@ void MainWindow::setupUiLogic()
     m_serialHotplugTimer->start();
 
     ui->pushButtonStop->setEnabled(false);
+    // 日志只写入本地文件，不在界面中显示，也不向 QTextEdit 追加内容。
+    ui->groupBoxLog->setVisible(false);
 
     QObject::connect(ui->comboBoxMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::slotModeChanged);
     QObject::connect(ui->pushButtonRefreshPorts, &QPushButton::clicked, this, &MainWindow::slotRefreshSerialPorts);
@@ -138,6 +141,17 @@ void MainWindow::setupUiLogic()
     QObject::connect(m_serialSendAllButton, &QPushButton::clicked, this, &MainWindow::slotSendAllSerialPorts);
     QObject::connect(m_sendTimer, &QTimer::timeout, this, &MainWindow::slotSendNextPacket);
     QObject::connect(m_timeoutTimer, &QTimer::timeout, this, &MainWindow::slotCheckTimeouts);
+    QObject::connect(ui->spinBoxTimeout, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int timeoutMs) {
+        // Timeout 是 I/O 线程 recv 的等待窗口，修改后立即广播到所有活动端口。
+        for (TcpPortSession *session : m_tcpSessions) {
+            if (session->worker) session->worker->setReceiveTimeout(timeoutMs);
+        }
+        for (SerialPortSession *session : m_serialSessions) {
+            if (session->worker) session->worker->setReceiveTimeout(timeoutMs);
+        }
+        if (auto *tcp = qobject_cast<TcpClientWorker *>(m_workerObject)) tcp->setReceiveTimeout(timeoutMs);
+        if (auto *serial = qobject_cast<SerialClientWorker *>(m_workerObject)) serial->setReceiveTimeout(timeoutMs);
+    });
 }
 
 /** 配置旧版单串口命令表的列、选择方式并创建第一条命令。 */
@@ -560,15 +574,9 @@ void MainWindow::removeTcpPort(quint16 port)
     }
     if (session->worker) {
         QObject::disconnect(session->worker, nullptr, this, nullptr);
-        if (session->thread && session->thread->isRunning()) {
-            QMetaObject::invokeMethod(session->worker, "disconnect", Qt::BlockingQueuedConnection);
-        }
-    }
-    if (session->thread) {
-        session->thread->quit();
-        session->thread->wait();
-        delete session->thread;
-        session->thread = nullptr;
+        static_cast<TcpClientWorker *>(session->worker)->disconnect();
+        delete static_cast<TcpClientWorker *>(session->worker);
+        session->worker = nullptr;
     }
     const int tabIndex = m_tcpCommandTabs->indexOf(session->commandPage);
     if (tabIndex >= 0) {
@@ -811,8 +819,8 @@ void MainWindow::addSerialPort(const QString &portName)
 
     auto *statsBox = new QGroupBox(QStringLiteral("Realtime Statistics - %1").arg(name), session->commandPage);
     auto *statsLayout = new QGridLayout(statsBox);
-    const QStringList statNames = {QStringLiteral("Total"), QStringLiteral("Success"), QStringLiteral("Lost"), QStringLiteral("P50"), QStringLiteral("P90"), QStringLiteral("P95"), QStringLiteral("P99")};
-    const QStringList objectNames = {QStringLiteral("serialTotalValue"), QStringLiteral("serialSuccessValue"), QStringLiteral("serialLostValue"), QStringLiteral("serialP50Value"), QStringLiteral("serialP90Value"), QStringLiteral("serialP95Value"), QStringLiteral("serialP99Value")};
+    const QStringList statNames = {QStringLiteral("Total"), QStringLiteral("Success"), QStringLiteral("Lost"), QStringLiteral("TX Bytes"), QStringLiteral("RX Bytes"), QStringLiteral("P50"), QStringLiteral("P90"), QStringLiteral("P95"), QStringLiteral("P99")};
+    const QStringList objectNames = {QStringLiteral("serialTotalValue"), QStringLiteral("serialSuccessValue"), QStringLiteral("serialLostValue"), QStringLiteral("serialTxBytesValue"), QStringLiteral("serialRxBytesValue"), QStringLiteral("serialP50Value"), QStringLiteral("serialP90Value"), QStringLiteral("serialP95Value"), QStringLiteral("serialP99Value")};
     for (int i = 0; i < statNames.size(); ++i) {
         auto *label = new QLabel(statNames.at(i), statsBox);
         auto *value = new QLabel(QStringLiteral("--"), statsBox);
@@ -1037,7 +1045,7 @@ bool MainWindow::isTcpMode() const
     return ui->comboBoxMode->currentIndex() == 0;
 }
 
-/** 为全部 TCP 会话创建 worker 线程并发起连接。 */
+/** 为全部 TCP 会话创建基于任务队列的 worker 并发起连接。 */
 void MainWindow::connectTcpPorts()
 {
     if (m_tcpSessions.isEmpty()) {
@@ -1053,14 +1061,10 @@ void MainWindow::connectTcpPorts()
 
     destroyTcpWorkers();
     for (TcpPortSession *session : m_tcpSessions) {
-        auto *thread = new QThread(this);
         auto *worker = new TcpClientWorker(address.toString(), session->port);
-        session->thread = thread;
         session->worker = worker;
         session->connecting = true;
-        worker->moveToThread(thread);
 
-        QObject::connect(thread, &QThread::finished, worker, &QObject::deleteLater);
         QObject::connect(worker, &TcpClientWorker::signalConnected, this, [this, session]() {
             if (m_tcpSessions.value(session->port) != session) return;
             session->connected = true;
@@ -1083,6 +1087,17 @@ void MainWindow::connectTcpPorts()
             PacketInfo packet;
             if (session->statistics.recordReceive(data, &packet)) {
                 appendLog(LogLevel::Rx, QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
+                session->awaitingResponse = false;
+                if (session->oneShotRunning) {
+                    if (session->oneShotCommands.isEmpty()) {
+                        session->oneShotRunning = false;
+                        appendLog(LogLevel::Info, QStringLiteral("[Port %1] Send complete").arg(session->port));
+                    } else {
+                        scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
+                    }
+                } else if (session->testRunning) {
+                    scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
+                }
             } else {
                 appendLog(LogLevel::Rx, QStringLiteral("[Port %1] Unmatched response %2").arg(session->port).arg(payloadToDisplay(data, QString(), false)));
             }
@@ -1091,10 +1106,15 @@ void MainWindow::connectTcpPorts()
         QObject::connect(worker, &TcpClientWorker::signalErrorOccurred, this, [this, session](const QString &message) {
             if (m_tcpSessions.value(session->port) == session) {
                 appendLog(LogLevel::Error, QStringLiteral("[Port %1] %2").arg(session->port).arg(message));
+                if (session->connecting) {
+                    session->connecting = false;
+                    updateTcpPortRow(session, QStringLiteral("Connection failed"));
+                    updateTcpConnectionState();
+                }
             }
         });
-        thread->start();
-        QMetaObject::invokeMethod(worker, "connect", Qt::QueuedConnection);
+        worker->setReceiveTimeout(ui->spinBoxTimeout->value());
+        worker->connect();
         updateTcpPortRow(session, QStringLiteral("Connecting"));
     }
     ui->pushButtonConnect->setEnabled(false);
@@ -1115,31 +1135,23 @@ void MainWindow::disconnectTcpPorts()
     appendLog(LogLevel::Info, QStringLiteral("All TCP connections closed"));
 }
 
-/** 停止并释放全部 TCP 会话的定时器、线程和 worker。 */
+/** 停止并释放全部 TCP 会话的定时器和任务队列 worker。 */
 void MainWindow::destroyTcpWorkers()
 {
     for (TcpPortSession *session : m_tcpSessions) {
         if (session->sendTimer) session->sendTimer->stop();
         session->oneShotCommands.clear();
         session->oneShotRunning = false;
-        if (!session->thread) {
+        if (!session->worker) {
             session->worker = nullptr;
             continue;
         }
         if (session->worker) {
             QObject::disconnect(session->worker, nullptr, this, nullptr);
-            if (session->thread->isRunning()) {
-                QMetaObject::invokeMethod(session->worker, "disconnect", Qt::BlockingQueuedConnection);
-            }
+            static_cast<TcpClientWorker *>(session->worker)->disconnect();
+            delete static_cast<TcpClientWorker *>(session->worker);
         }
-        session->thread->quit();
-        session->thread->wait();
-        // TcpClientWorker is connected to QThread::finished -> deleteLater().
-        // It owns a QTcpSocket with the worker-thread affinity, so never delete
-        // it from the GUI thread after the worker thread has stopped.
-        delete session->thread;
         session->worker = nullptr;
-        session->thread = nullptr;
         session->connected = false;
         session->connecting = false;
     }
@@ -1183,7 +1195,7 @@ void MainWindow::updateTcpConnectionState()
     ui->pushButtonDisconnect->setEnabled(connected > 0 || connecting > 0);
 }
 
-/** 创建串口 worker 线程并并发打开全部串口。 */
+/** 创建基于任务队列的串口 worker 并并发打开全部串口。 */
 void MainWindow::connectSerialPorts()
 {
     if (m_serialSessions.isEmpty()) {
@@ -1199,13 +1211,9 @@ void MainWindow::connectSerialPorts()
             appendLog(LogLevel::Error, QStringLiteral("[%1] Invalid serial port name").arg(session->portName));
             continue;
         }
-        auto *thread = new QThread(this);
         auto *worker = new SerialClientWorker(settings);
-        session->thread = thread;
         session->worker = worker;
         session->connecting = true;
-        worker->moveToThread(thread);
-        QObject::connect(thread, &QThread::finished, worker, &QObject::deleteLater);
         QObject::connect(worker, &SerialClientWorker::signalConnected, this, [this, session]() {
             if (m_serialSessions.value(session->portName) != session) return;
             session->connected = true;
@@ -1242,6 +1250,17 @@ void MainWindow::connectSerialPorts()
             PacketInfo packet;
             if (session->statistics.recordReceive(data, &packet)) {
                 appendLog(LogLevel::Rx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
+                session->awaitingResponse = false;
+                if (session->oneShotRunning) {
+                    if (session->oneShotCommands.isEmpty()) {
+                        session->oneShotRunning = false;
+                        appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
+                    } else {
+                        scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
+                    }
+                } else if (session->testRunning) {
+                    scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
+                }
             } else {
                 appendLog(LogLevel::Rx, QStringLiteral("[%1] Unmatched response %2").arg(session->portName).arg(payloadToDisplay(data, QString(), false)));
             }
@@ -1257,8 +1276,8 @@ void MainWindow::connectSerialPorts()
                 updateSerialConnectionState();
             }
         });
-        thread->start();
-        QMetaObject::invokeMethod(worker, "connect", Qt::QueuedConnection);
+        worker->setReceiveTimeout(ui->spinBoxTimeout->value());
+        worker->connect();
         updateSerialPortRow(session, QStringLiteral("Connecting"));
         ++started;
     }
@@ -1280,14 +1299,14 @@ void MainWindow::disconnectSerialPorts()
     appendLog(LogLevel::Info, QStringLiteral("All serial connections closed"));
 }
 
-/** 关闭一个串口 worker 的设备、线程和发送定时器。 */
+/** 关闭一个串口 worker 的设备、任务队列和发送定时器。 */
 void MainWindow::destroySerialWorker(SerialPortSession *session)
 {
     if (!session) return;
     if (session->sendTimer) session->sendTimer->stop();
     session->oneShotCommands.clear();
     session->oneShotRunning = false;
-    if (!session->thread) {
+    if (!session->worker) {
         session->worker = nullptr;
         session->connected = false;
         session->connecting = false;
@@ -1295,14 +1314,9 @@ void MainWindow::destroySerialWorker(SerialPortSession *session)
     }
     if (session->worker) {
         QObject::disconnect(session->worker, nullptr, this, nullptr);
-        if (session->thread->isRunning()) {
-            QMetaObject::invokeMethod(session->worker, "disconnect", Qt::BlockingQueuedConnection);
-        }
+        session->worker->disconnect();
+        delete session->worker;
     }
-    session->thread->quit();
-    session->thread->wait(3000);
-    delete session->thread;
-    session->thread = nullptr;
     session->worker = nullptr;
     session->connected = false;
     session->connecting = false;
@@ -1368,6 +1382,8 @@ void MainWindow::sendAllSerialPort(SerialPortSession *session)
     for (const CommandItem &item : commands) session->oneShotCommands.enqueue(item);
     session->oneShotRunning = true;
     session->nextOneShotDeadlineMs = 0;
+    session->awaitingResponse = false;
+    m_timeoutTimer->start();
     session->sendClock.start();
     appendLog(LogLevel::Info, QStringLiteral("[%1] Sending all commands").arg(session->portName));
     sendNextOneShotSerialPacket(session);
@@ -1377,6 +1393,8 @@ void MainWindow::sendAllSerialPort(SerialPortSession *session)
 void MainWindow::sendNextOneShotSerialPacket(SerialPortSession *session)
 {
     if (!session || !session->oneShotRunning || !session->worker || !session->connected) return;
+    if (session->awaitingResponse) return;
+    session->nextOneShotDeadlineMs = 0;
     if (session->oneShotCommands.isEmpty()) {
         session->oneShotRunning = false;
         session->nextOneShotDeadlineMs = 0;
@@ -1389,16 +1407,15 @@ void MainWindow::sendNextOneShotSerialPacket(SerialPortSession *session)
         const QString format = item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII");
         const PacketInfo packet = session->statistics.recordSend(payload, format);
         appendLog(LogLevel::Tx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(item.text));
-        QMetaObject::invokeMethod(session->worker, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+        session->awaitingResponse = true;
+        session->worker->sendData(payload);
         updateSerialSessionStats(session);
         scheduleStatsRefresh();
-    }
-    if (session->oneShotCommands.isEmpty()) {
-        session->oneShotRunning = false;
-        session->nextOneShotDeadlineMs = 0;
-        appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
-    } else {
+    } else if (!session->oneShotCommands.isEmpty()) {
         scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
+    } else {
+        session->oneShotRunning = false;
+        appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
     }
 }
 
@@ -1438,6 +1455,7 @@ void MainWindow::startSerialTest()
         const QList<CommandItem> commands = collectSerialCommands(session);
         if (!validateCommands(commands)) continue;
         session->statistics.reset();
+        session->awaitingResponse = false;
         session->currentCommandIndex = 0;
         session->perCommandSendCount = QVector<int>(commands.size(), 0);
         session->testRunning = true;
@@ -1450,8 +1468,6 @@ void MainWindow::startSerialTest()
         appendLog(LogLevel::Error, QStringLiteral("No connected serial port is ready"));
         return;
     }
-    ui->textEditLog->clear();
-    m_logHistory.clear();
     m_testRunning = true;
     m_finishingAfterLimit = false;
     ui->pushButtonStart->setEnabled(false);
@@ -1495,15 +1511,16 @@ void MainWindow::stopSerialTest(bool manualStop)
 void MainWindow::sendNextSerialPacket(SerialPortSession *session)
 {
     if (!session || !session->testRunning || !session->worker || !session->connected) return;
+    if (session->awaitingResponse) return;
+    session->nextSendDeadlineMs = 0;
     const QList<CommandItem> commands = collectSerialCommands(session);
     if (commands.isEmpty()) {
         session->finishingAfterLimit = true;
         return;
     }
     const int targetCount = ui->spinBoxSendCount->value();
-    const int intervalMs = ui->spinBoxInterval->value();
     if (session->statistics.pendingPacketCount() >= kMaxInFlightPackets) {
-        scheduleNextSerialPacket(session, qMax(1, intervalMs));
+        session->awaitingResponse = true;
         return;
     }
     if (session->perCommandSendCount.size() != commands.size()) session->perCommandSendCount = QVector<int>(commands.size(), 0);
@@ -1523,12 +1540,12 @@ void MainWindow::sendNextSerialPacket(SerialPortSession *session)
         const PacketInfo packet = session->statistics.recordSend(payload, item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII"));
         ++session->perCommandSendCount[session->currentCommandIndex];
         appendLog(LogLevel::Tx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(item.text));
-        QMetaObject::invokeMethod(session->worker, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+        session->awaitingResponse = true;
+        session->worker->sendData(payload);
         updateSerialSessionStats(session);
         scheduleStatsRefresh();
     }
     session->currentCommandIndex = (session->currentCommandIndex + 1) % commands.size();
-    scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
 }
 
 /** 使用绝对目标时间安排串口连续测试的下一次发送。 */
@@ -1554,15 +1571,30 @@ void MainWindow::scheduleNextSerialPacket(SerialPortSession *session, int interv
 /** 扫描串口会话超时状态，并在全部会话完成后停止测试。 */
 void MainWindow::checkSerialTimeouts()
 {
-    if (!m_testRunning) return;
     bool allFinished = true;
+    bool hasTest = false;
     for (SerialPortSession *session : m_serialSessions) {
+        if (!session->testRunning && !session->oneShotRunning) continue;
+        if (session->testRunning) hasTest = true;
         const QVector<PacketInfo> timedOut = session->statistics.markTimeouts(ui->spinBoxTimeout->value());
-        for (const PacketInfo &packet : timedOut) appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 timeout/lost").arg(session->portName).arg(packet.id), packet.elapsedMs);
+        if (!timedOut.isEmpty()) {
+            session->awaitingResponse = false;
+            for (const PacketInfo &packet : timedOut) appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 timeout/lost").arg(session->portName).arg(packet.id), packet.elapsedMs);
+            if (session->oneShotRunning) {
+                if (session->oneShotCommands.isEmpty()) {
+                    session->oneShotRunning = false;
+                    appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
+                } else {
+                    scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
+                }
+            } else if (session->testRunning && !session->finishingAfterLimit) {
+                scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
+            }
+        }
         if (!(session->finishingAfterLimit && !session->statistics.hasPendingPackets()) && session->testRunning) allFinished = false;
         updateSerialSessionStats(session);
     }
-    if (allFinished) stopSerialTest(false);
+    if (hasTest && allFinished) stopSerialTest(false);
     scheduleStatsRefresh();
 }
 
@@ -1602,6 +1634,8 @@ void MainWindow::sendAllTcpPort(TcpPortSession *session)
     }
     session->oneShotRunning = true;
     session->nextOneShotDeadlineMs = 0;
+    session->awaitingResponse = false;
+    m_timeoutTimer->start();
     session->sendClock.start();
     sendNextOneShotTcpPacket(session);
 }
@@ -1612,6 +1646,8 @@ void MainWindow::sendNextOneShotTcpPacket(TcpPortSession *session)
     if (!session || !session->oneShotRunning || !session->worker || !session->connected) {
         return;
     }
+    if (session->awaitingResponse) return;
+    session->nextOneShotDeadlineMs = 0;
     if (session->oneShotCommands.isEmpty()) {
         session->oneShotRunning = false;
         session->nextOneShotDeadlineMs = 0;
@@ -1626,14 +1662,14 @@ void MainWindow::sendNextOneShotTcpPacket(TcpPortSession *session)
         const QString format = item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII");
         const PacketInfo packet = session->statistics.recordSend(payload, format);
         appendLog(LogLevel::Tx, QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(item.text));
-        QMetaObject::invokeMethod(session->worker, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+        session->awaitingResponse = true;
+        session->worker->sendData(payload);
         scheduleStatsRefresh();
-    }
-    if (session->oneShotCommands.isEmpty()) {
-        session->oneShotRunning = false;
-        session->nextOneShotDeadlineMs = 0;
-    } else {
+    } else if (!session->oneShotCommands.isEmpty()) {
         scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
+    } else {
+        session->oneShotRunning = false;
+        session->awaitingResponse = false;
     }
 }
 
@@ -1668,8 +1704,6 @@ void MainWindow::startTcpTest()
         if (!validateCommands(collectCommands(session->commandTable))) return;
     }
 
-    ui->textEditLog->clear();
-    m_logHistory.clear();
     for (TcpPortSession *session : m_tcpSessions) {
         const QList<CommandItem> commands = collectCommands(session->commandTable);
         session->statistics.reset();
@@ -1734,14 +1768,15 @@ void MainWindow::stopTcpTest(bool manualStop)
 void MainWindow::sendNextTcpPacket(TcpPortSession *session)
 {
     if (!session || !session->testRunning || !session->worker) return;
+    if (session->awaitingResponse) return;
+    session->nextSendDeadlineMs = 0;
     const QList<CommandItem> commands = collectCommands(session->commandTable);
     if (commands.isEmpty()) {
         session->finishingAfterLimit = true;
         return;
     }
-    const int intervalMs = ui->spinBoxInterval->value();
     if (session->statistics.pendingPacketCount() >= kMaxInFlightPackets) {
-        scheduleNextTcpPacket(session, qMax(1, intervalMs));
+        session->awaitingResponse = true;
         return;
     }
     const int targetCount = ui->spinBoxSendCount->value();
@@ -1766,11 +1801,11 @@ void MainWindow::sendNextTcpPacket(TcpPortSession *session)
         const PacketInfo packet = session->statistics.recordSend(payload, format);
         ++session->perCommandSendCount[session->currentCommandIndex];
         appendLog(LogLevel::Tx, QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(item.text));
-        QMetaObject::invokeMethod(session->worker, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+        session->awaitingResponse = true;
+        session->worker->sendData(payload);
         scheduleStatsRefresh();
     }
     session->currentCommandIndex = (session->currentCommandIndex + 1) % commands.size();
-    scheduleNextTcpPacket(session, intervalMs);
 }
 
 /** 使用绝对目标时间安排 TCP 连续测试的下一次发送。 */
@@ -1796,14 +1831,28 @@ void MainWindow::scheduleNextTcpPacket(TcpPortSession *session, int intervalMs)
 /** 扫描 TCP 会话超时状态，并在全部会话完成后停止测试。 */
 void MainWindow::checkTcpTimeouts()
 {
-    if (!m_testRunning) return;
     bool allFinished = true;
+    bool hasTest = false;
     for (TcpPortSession *session : m_tcpSessions) {
+        if (!session->testRunning && !session->oneShotRunning) continue;
+        if (session->testRunning) hasTest = true;
         const QVector<PacketInfo> timedOut = session->statistics.markTimeouts(ui->spinBoxTimeout->value());
-        for (const PacketInfo &packet : timedOut) appendLog(LogLevel::Error, QStringLiteral("[Port %1] #%2 timeout/lost").arg(session->port).arg(packet.id), packet.elapsedMs);
-        if (!(session->finishingAfterLimit && !session->statistics.hasPendingPackets())) allFinished = false;
+        if (!timedOut.isEmpty()) {
+            session->awaitingResponse = false;
+            for (const PacketInfo &packet : timedOut) appendLog(LogLevel::Error, QStringLiteral("[Port %1] #%2 timeout/lost").arg(session->port).arg(packet.id), packet.elapsedMs);
+            if (session->oneShotRunning) {
+                if (session->oneShotCommands.isEmpty()) {
+                    session->oneShotRunning = false;
+                } else {
+                    scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
+                }
+            } else if (session->testRunning && !session->finishingAfterLimit) {
+                scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
+            }
+        }
+        if (session->testRunning && !(session->finishingAfterLimit && !session->statistics.hasPendingPackets())) allFinished = false;
     }
-    if (allFinished) stopTcpTest(false);
+    if (hasTest && allFinished) stopTcpTest(false);
     scheduleStatsRefresh();
 }
 
@@ -1922,7 +1971,7 @@ void MainWindow::slotSendNextPacket()
     const PacketInfo packet = m_statistics.recordSend(payload, dataFormat);
     ++m_perCommandSendCount[m_currentCommandIndex];
     appendLog(LogLevel::Tx, QStringLiteral("#%1 %2").arg(packet.id).arg(item.text));
-    QMetaObject::invokeMethod(m_workerObject, "sendData", Qt::QueuedConnection, Q_ARG(QByteArray, payload));
+    m_commInterface->sendData(payload);
     scheduleStatsRefresh();
 
     // 移到下一条命令，下次 timer 触发时发送
@@ -2043,8 +2092,6 @@ void MainWindow::setConnectionState(ConnectionState state)
 /** 根据当前模式创建兼容旧界面的 TCP 或串口 worker。 */
 void MainWindow::createWorker()
 {
-    m_commThread = new QThread(this);
-
     if (ui->comboBoxMode->currentIndex() == 0) {
         auto *worker = new TcpClientWorker(ui->lineEditIp->text().trimmed(), static_cast<quint16>(ui->spinBoxPort->value()));
         m_workerObject = worker;
@@ -2052,8 +2099,6 @@ void MainWindow::createWorker()
     } else {
         if (ui->comboBoxSerialPort->currentText().isEmpty()) {
             appendLog(LogLevel::Error, QStringLiteral("No serial port available, refresh and retry"));
-            delete m_commThread;
-            m_commThread = nullptr;
             return;
         }
         SerialSettings settings;
@@ -2074,32 +2119,30 @@ void MainWindow::createWorker()
         m_commInterface = worker;
     }
 
-    m_workerObject->moveToThread(m_commThread);
-    QObject::connect(m_commThread, &QThread::finished, m_workerObject, &QObject::deleteLater);
     QObject::connect(m_workerObject, SIGNAL(signalConnected()), this, SLOT(slotWorkerConnected()));
     QObject::connect(m_workerObject, SIGNAL(signalDisconnected()), this, SLOT(slotWorkerDisconnected()));
     QObject::connect(m_workerObject, SIGNAL(signalDataReceived(QByteArray)), this, SLOT(slotWorkerDataReceived(QByteArray)));
     QObject::connect(m_workerObject, SIGNAL(signalErrorOccurred(QString)), this, SLOT(slotWorkerError(QString)));
-    m_commThread->start();
+    if (auto *tcp = qobject_cast<TcpClientWorker *>(m_workerObject)) {
+        tcp->setReceiveTimeout(ui->spinBoxTimeout->value());
+    } else if (auto *serial = qobject_cast<SerialClientWorker *>(m_workerObject)) {
+        serial->setReceiveTimeout(ui->spinBoxTimeout->value());
+    }
 }
 
 /** 停止旧单 worker 线程并释放其通信对象。 */
 void MainWindow::destroyWorker()
 {
-    if (!m_commThread) {
+    if (!m_workerObject) {
         m_workerObject = nullptr;
         m_commInterface = nullptr;
         return;
     }
 
     if (m_workerObject) {
-        QMetaObject::invokeMethod(m_workerObject, "disconnect", Qt::BlockingQueuedConnection);
+        m_commInterface->disconnect();
+        delete m_workerObject;
     }
-
-    m_commThread->quit();
-    m_commThread->wait(3000);
-    delete m_commThread;
-    m_commThread = nullptr;
     m_workerObject = nullptr;
     m_commInterface = nullptr;
     m_connected = false;
@@ -2115,6 +2158,8 @@ void MainWindow::updateStatsView()
         for (const TcpPortSession *session : m_tcpSessions) {
             for (const PacketInfo &packet : session->statistics.packets()) {
                 ++snap.totalSent;
+                snap.totalSentBytes += static_cast<quint64>(packet.txPayload.size());
+                snap.totalReceivedBytes += static_cast<quint64>(packet.rxPayload.size());
                 if (packet.status == PacketInfo::Status::Success) {
                     ++snap.successReceived;
                     elapsedValues.push_back(packet.elapsedMs);
@@ -2149,6 +2194,8 @@ void MainWindow::updateStatsView()
         ui->labelAverageValue->setText(QStringLiteral("%1 ms").arg(snap.averageElapsedMs, 0, 'f', 3));
         ui->labelMaxValue->setText(QStringLiteral("%1 ms").arg(snap.maxElapsedMs));
         ui->labelMinValue->setText(QStringLiteral("%1 ms").arg(snap.minElapsedMs));
+        if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelTxBytesValue"))) label->setText(QString::number(snap.totalSentBytes));
+        if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelRxBytesValue"))) label->setText(QString::number(snap.totalReceivedBytes));
         auto setTcpLabel = [&](const QString &name, double value) {
             if (auto *label = ui->groupBoxStats->findChild<QLabel *>(name)) label->setText(QStringLiteral("%1 ms").arg(value, 0, 'f', 3));
         };
@@ -2167,6 +2214,8 @@ void MainWindow::updateStatsView()
             updateSerialSessionStats(session);
             for (const PacketInfo &packet : session->statistics.packets()) {
                 ++snap.totalSent;
+                snap.totalSentBytes += static_cast<quint64>(packet.txPayload.size());
+                snap.totalReceivedBytes += static_cast<quint64>(packet.rxPayload.size());
                 if (packet.status == PacketInfo::Status::Success) {
                     ++snap.successReceived;
                     elapsedValues.push_back(packet.elapsedMs);
@@ -2201,6 +2250,8 @@ void MainWindow::updateStatsView()
         ui->labelAverageValue->setText(QStringLiteral("%1 ms").arg(snap.averageElapsedMs, 0, 'f', 3));
         ui->labelMaxValue->setText(QStringLiteral("%1 ms").arg(snap.maxElapsedMs));
         ui->labelMinValue->setText(QStringLiteral("%1 ms").arg(snap.minElapsedMs));
+        if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelTxBytesValue"))) label->setText(QString::number(snap.totalSentBytes));
+        if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelRxBytesValue"))) label->setText(QString::number(snap.totalReceivedBytes));
         auto setSerialAggregateLabel = [&](const QString &name, double value) {
             if (auto *label = ui->groupBoxStats->findChild<QLabel *>(name)) label->setText(QStringLiteral("%1 ms").arg(value, 0, 'f', 3));
         };
@@ -2219,6 +2270,8 @@ void MainWindow::updateStatsView()
     ui->labelAverageValue->setText(QStringLiteral("%1 ms").arg(snap.averageElapsedMs, 0, 'f', 3));
     ui->labelMaxValue->setText(QStringLiteral("%1 ms").arg(snap.maxElapsedMs));
     ui->labelMinValue->setText(QStringLiteral("%1 ms").arg(snap.minElapsedMs));
+    if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelTxBytesValue"))) label->setText(QString::number(snap.totalSentBytes));
+    if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelRxBytesValue"))) label->setText(QString::number(snap.totalReceivedBytes));
 
     auto setLabel = [&](const QString &objName, const QString &text) {
         auto *label = ui->groupBoxStats->findChild<QLabel*>(objName);
@@ -2242,6 +2295,8 @@ void MainWindow::updateSerialSessionStats(SerialPortSession *session)
     setValue(QStringLiteral("serialTotalValue"), QString::number(snap.totalSent));
     setValue(QStringLiteral("serialSuccessValue"), QString::number(snap.successReceived));
     setValue(QStringLiteral("serialLostValue"), QString::number(snap.lostPackets));
+    setValue(QStringLiteral("serialTxBytesValue"), QString::number(snap.totalSentBytes));
+    setValue(QStringLiteral("serialRxBytesValue"), QString::number(snap.totalReceivedBytes));
     setValue(QStringLiteral("serialP50Value"), QStringLiteral("%1 ms").arg(snap.p50Ms, 0, 'f', 3));
     setValue(QStringLiteral("serialP90Value"), QStringLiteral("%1 ms").arg(snap.p90Ms, 0, 'f', 3));
     setValue(QStringLiteral("serialP95Value"), QStringLiteral("%1 ms").arg(snap.p95Ms, 0, 'f', 3));
@@ -2251,7 +2306,7 @@ void MainWindow::updateSerialSessionStats(SerialPortSession *session)
 /** 向旧版全局统计网格追加 P50/P90/P95/P99 行。 */
 void MainWindow::setupStatsLabels()
 {
-    // 在统计区已有的 Min 行下方插入百分位指标行
+    // 在统计区已有的 Min 行下方插入流量和百分位指标行
     int row = 8;
 
     auto addRow = [&](const QString &title, const QString &objName) {
@@ -2263,6 +2318,8 @@ void MainWindow::setupStatsLabels()
         ++row;
     };
 
+    addRow(QStringLiteral("TX Bytes"), QStringLiteral("labelTxBytesValue"));
+    addRow(QStringLiteral("RX Bytes"), QStringLiteral("labelRxBytesValue"));
     addRow(QStringLiteral("P50"), QStringLiteral("labelP50Value"));
     addRow(QStringLiteral("P90"), QStringLiteral("labelP90Value"));
     addRow(QStringLiteral("P95"), QStringLiteral("labelP95Value"));
@@ -2280,23 +2337,18 @@ void MainWindow::scheduleStatsRefresh()
 void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs)
 {
     QString tag;
-    QString color;
     switch (level) {
     case LogLevel::Tx:
         tag = QStringLiteral("TX");
-        color = QStringLiteral("#5fa8ff");
         break;
     case LogLevel::Rx:
         tag = QStringLiteral("RX");
-        color = QStringLiteral("#42d392");
         break;
     case LogLevel::Error:
-        tag = QStringLiteral("ERR");
-        color = QStringLiteral("#ff6b6b");
+        tag = QStringLiteral("Error");
         break;
     case LogLevel::Info:
         tag = QStringLiteral("INF");
-        color = QStringLiteral("#c0c8d0");
         break;
     }
 
@@ -2307,31 +2359,33 @@ void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs
     }
 
     // 先保存未截断的纯文本事件，报告文件因此可以还原日志区域的完整内容。
-    m_logHistory.append(QStringLiteral("[%1] %2%3 %4").arg(tag, timestamp, elapsed, text));
+    QString portTag = QStringLiteral("global");
+    const QRegularExpression portExpression(QStringLiteral("^\\[([^\\]]+)\\]"));
+    const QRegularExpressionMatch portMatch = portExpression.match(text);
+    if (portMatch.hasMatch()) portTag = portMatch.captured(1);
+    const QString line = QStringLiteral("[%1] %2%3 %4").arg(tag, timestamp, elapsed, text);
+    appendLogFile(portTag, line);
 
-    // Never render megabytes of command data in QTextEdit: doing so blocks the
-    // GUI event loop and directly distorts the send interval. Full payloads are
-    // still written to the report file; the on-screen log is a bounded preview.
-    QString displayText = text;
-    constexpr int kMaximumDisplayCharacters = 4096;
-    if (displayText.size() > kMaximumDisplayCharacters) {
-        const int previewSize = kMaximumDisplayCharacters / 2;
-        displayText = displayText.left(previewSize) +
-                      QStringLiteral(" ... [truncated %1 chars] ... ").arg(text.size() - kMaximumDisplayCharacters) +
-                      displayText.right(previewSize);
-    }
-
-    QString html = QStringLiteral("<span style='color:%1;'><b>[%2]</b> %3%4 %5</span>")
-                       .arg(color, tag, timestamp, elapsed, htmlEscape(displayText));
-
-    ui->textEditLog->append(html);
-    QScrollBar *scrollBar = ui->textEditLog->verticalScrollBar();
-    if (scrollBar) {
-        scrollBar->setValue(scrollBar->maximum());
-    }
 }
 
 /** 停止旧单 worker 测试、标记未完成包并保存报告。 */
+void MainWindow::appendLogFile(const QString &portTag, const QString &line)
+{
+    QDir logDir(QDir::current().filePath(QStringLiteral("Log")));
+    if (!logDir.exists() && !logDir.mkpath(QStringLiteral("."))) return;
+
+    QString safeName = portTag;
+    safeName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]+")), QStringLiteral("_"));
+    if (safeName.isEmpty()) safeName = QStringLiteral("global");
+    QFile file(logDir.filePath(QStringLiteral("%1.log").arg(safeName)));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) return;
+    QTextStream stream(&file);
+    stream.setEncoding(QStringConverter::Utf8);
+    stream << line << QLatin1Char('\n');
+    stream.flush();
+    file.close();
+}
+
 void MainWindow::stopTest(bool manualStop)
 {
     if (!m_testRunning) {
@@ -2419,13 +2473,13 @@ void MainWindow::finalizeTestReport()
     out << QStringLiteral("Average: %1 ms\n").arg(snap.averageElapsedMs, 0, 'f', 2);
     out << QStringLiteral("Max: %1 ms\n").arg(snap.maxElapsedMs);
     out << QStringLiteral("Min: %1 ms\n").arg(snap.minElapsedMs);
+    out << QStringLiteral("TX Bytes: %1\nRX Bytes: %2\nTX Rate: %3 B/s\nRX Rate: %4 B/s\n").arg(snap.totalSentBytes).arg(snap.totalReceivedBytes).arg(snap.txBytesPerSecond, 0, 'f', 2).arg(snap.rxBytesPerSecond, 0, 'f', 2);
     out << QStringLiteral("P50: %1 ms\n").arg(snap.p50Ms, 0, 'f', 3);
     out << QStringLiteral("P90: %1 ms\n").arg(snap.p90Ms, 0, 'f', 3);
     out << QStringLiteral("P95: %1 ms\n").arg(snap.p95Ms, 0, 'f', 3);
     out << QStringLiteral("P99: %1 ms\n").arg(snap.p99Ms, 0, 'f', 3);
 
     appendLog(LogLevel::Info, QStringLiteral("Test report saved: %1").arg(filePath));
-    writeEventLog(out);
     file.close();
 }
 
@@ -2462,11 +2516,10 @@ void MainWindow::finalizeSerialReport()
             out << QStringLiteral("Command %1 | Format: %2 | Data: %3\n").arg(commandNumber++).arg(item.hexMode ? QStringLiteral("HEX") : QStringLiteral("ASCII")).arg(text);
         }
         const StatisticsSnapshot snap = session->statistics.snapshot();
-        out << QStringLiteral("Total Sent: %1\nSuccess RX: %2\nLost: %3\nSuccess Rate: %4%\nAverage: %5 ms\nMax: %6 ms\nMin: %7 ms\nP50: %8 ms\nP90: %9 ms\nP95: %10 ms\nP99: %11 ms\n").arg(snap.totalSent).arg(snap.successReceived).arg(snap.lostPackets).arg(snap.successRate, 0, 'f', 2).arg(snap.averageElapsedMs, 0, 'f', 3).arg(snap.maxElapsedMs).arg(snap.minElapsedMs).arg(snap.p50Ms, 0, 'f', 3).arg(snap.p90Ms, 0, 'f', 3).arg(snap.p95Ms, 0, 'f', 3).arg(snap.p99Ms, 0, 'f', 3);
+        out << QStringLiteral("Total Sent: %1\nSuccess RX: %2\nLost: %3\nTX Bytes: %4\nRX Bytes: %5\nTX Rate: %6 B/s\nRX Rate: %7 B/s\nSuccess Rate: %8%\nAverage: %9 ms\nMax: %10 ms\nMin: %11 ms\nP50: %12 ms\nP90: %13 ms\nP95: %14 ms\nP99: %15 ms\n").arg(snap.totalSent).arg(snap.successReceived).arg(snap.lostPackets).arg(snap.totalSentBytes).arg(snap.totalReceivedBytes).arg(snap.txBytesPerSecond, 0, 'f', 2).arg(snap.rxBytesPerSecond, 0, 'f', 2).arg(snap.successRate, 0, 'f', 2).arg(snap.averageElapsedMs, 0, 'f', 3).arg(snap.maxElapsedMs).arg(snap.minElapsedMs).arg(snap.p50Ms, 0, 'f', 3).arg(snap.p90Ms, 0, 'f', 3).arg(snap.p95Ms, 0, 'f', 3).arg(snap.p99Ms, 0, 'f', 3);
         out << QLatin1Char('\n');
     }
     appendLog(LogLevel::Info, QStringLiteral("Multi-serial report saved: %1").arg(file.fileName()));
-    writeEventLog(out);
     file.close();
 }
 
@@ -2517,25 +2570,17 @@ void MainWindow::finalizeTcpReport()
         out << QStringLiteral("Average: %1 ms\n").arg(snap.averageElapsedMs, 0, 'f', 3);
         out << QStringLiteral("Max: %1 ms\n").arg(snap.maxElapsedMs);
         out << QStringLiteral("Min: %1 ms\n").arg(snap.minElapsedMs);
+        out << QStringLiteral("TX Bytes: %1\nRX Bytes: %2\nTX Rate: %3 B/s\nRX Rate: %4 B/s\n").arg(snap.totalSentBytes).arg(snap.totalReceivedBytes).arg(snap.txBytesPerSecond, 0, 'f', 2).arg(snap.rxBytesPerSecond, 0, 'f', 2);
         out << QStringLiteral("P50: %1 ms\n").arg(snap.p50Ms, 0, 'f', 3);
         out << QStringLiteral("P90: %1 ms\n").arg(snap.p90Ms, 0, 'f', 3);
         out << QStringLiteral("P95: %1 ms\n").arg(snap.p95Ms, 0, 'f', 3);
         out << QStringLiteral("P99: %1 ms\n").arg(snap.p99Ms, 0, 'f', 3);
     }
     appendLog(LogLevel::Info, QStringLiteral("Multi-port test report saved: %1").arg(file.fileName()));
-    writeEventLog(out);
     file.close();
 }
 
 /** 将日志区域的每条完整事件按时间顺序写入报告。 */
-void MainWindow::writeEventLog(QTextStream &out) const
-{
-    out << QStringLiteral("\n--- Complete UI Event Log ---\n");
-    for (const QString &line : m_logHistory) {
-        out << line << QLatin1Char('\n');
-    }
-}
-
 /** 兼容旧单 worker 的发送上限完成检查。 */
 void MainWindow::checkFinishAfterLimit()
 {
@@ -2631,13 +2676,4 @@ QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &f
 }
 
 /** 将日志中的 HTML 特殊字符转换为安全文本。 */
-QString MainWindow::htmlEscape(const QString &value)
-{
-    QString escaped = value;
-    escaped.replace(QStringLiteral("&"), QStringLiteral("&amp;"));
-    escaped.replace(QStringLiteral("<"), QStringLiteral("&lt;"));
-    escaped.replace(QStringLiteral(">"), QStringLiteral("&gt;"));
-    return escaped;
-}
-
 END_NAMESPACE_CIQTEK

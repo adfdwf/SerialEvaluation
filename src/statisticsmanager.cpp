@@ -155,6 +155,8 @@ StatisticsSnapshot StatisticsManager::snapshot() const
     qint64 maxValue = 0;                                  // 成功 RTT 的最大值。
 
     for (const PacketInfo &packet : m_packets) {
+        snap.totalSentBytes += static_cast<quint64>(packet.txPayload.size());
+        snap.totalReceivedBytes += static_cast<quint64>(packet.rxPayload.size());
         if (packet.status == PacketInfo::Status::Success) {
             ++snap.successReceived;
             sum += packet.elapsedMs;
@@ -200,6 +202,13 @@ StatisticsSnapshot StatisticsManager::snapshot() const
         snap.p90Ms = percentile(0.90);
         snap.p95Ms = percentile(0.95);
         snap.p99Ms = percentile(0.99);
+    }
+
+    const qint64 elapsedMs = m_timer.elapsed();
+    if (elapsedMs > 0) {
+        const double seconds = static_cast<double>(elapsedMs) / 1000.0;
+        snap.txBytesPerSecond = static_cast<double>(snap.totalSentBytes) / seconds;
+        snap.rxBytesPerSecond = static_cast<double>(snap.totalReceivedBytes) / seconds;
     }
 
     return snap;

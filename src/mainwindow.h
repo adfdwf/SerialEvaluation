@@ -3,6 +3,7 @@
 
 #include "namespace.h"
 #include "serialclientworker.h"
+#include "tcpclientworker.h"
 #include "statisticsmanager.h"
 
 #include <QByteArray>
@@ -14,7 +15,6 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
-#include <QThread>
 #include <QTimer>
 #include <QVector>
 #include <QRadioButton>
@@ -43,8 +43,7 @@ struct CommandItem {
 /** 一个 TCP 端口的 UI、线程、发送调度和统计状态。 */
 struct TcpPortSession {
     quint16 port = 0;                         ///< TCP 端口号。
-    QThread *thread = nullptr;                ///< 该端口 worker 所在线程。
-    QObject *worker = nullptr;                ///< TCP worker 对象。
+    TcpClientWorker *worker = nullptr;         ///< TCP worker 对象。
     bool connected = false;                   ///< 是否已连接。
     bool connecting = false;                  ///< 是否正在连接。
     QTimer *sendTimer = nullptr;              ///< 连续发送和单次发送共用的精准定时器。
@@ -59,13 +58,13 @@ struct TcpPortSession {
     QVector<int> perCommandSendCount;         ///< 每条命令已经发送的次数。
     QQueue<CommandItem> oneShotCommands;      ///< 单端口 Send All 尚未发送的命令队列。
     bool oneShotRunning = false;              ///< 是否正在执行单次批量发送。
+    bool awaitingResponse = false;             ///< 当前任务是否正在等待 recv 或 Timeout。
     qint64 nextOneShotDeadlineMs = 0;          ///< 下一条单次命令的目标发送时间。
 };
 
 /** 一个串口的配置控件、worker、发送调度和独立统计状态。 */
 struct SerialPortSession {
     QString portName;                         ///< 串口名称，例如 COM3 或 /dev/ttyUSB0。
-    QThread *thread = nullptr;                ///< 串口 worker 所在线程。
     SerialClientWorker *worker = nullptr;     ///< 串口 worker 对象。
     bool connected = false;                   ///< 是否已打开串口。
     bool connecting = false;                  ///< 是否正在打开串口。
@@ -86,6 +85,7 @@ struct SerialPortSession {
     QVector<int> perCommandSendCount;         ///< 每条命令已经发送的次数。
     QQueue<CommandItem> oneShotCommands;      ///< 单串口 Send All 尚未发送的命令队列。
     bool oneShotRunning = false;              ///< 是否正在执行单次批量发送。
+    bool awaitingResponse = false;             ///< 当前任务是否正在等待 recv 或 Timeout。
     qint64 nextOneShotDeadlineMs = 0;          ///< 下一条单次命令的目标发送时间。
 };
 
@@ -199,8 +199,6 @@ private:
     QString payloadToDisplay(const QByteArray &payload,
                              const QString &format = QString(),
                              bool truncate = true);
-    /** @brief 对日志文本进行 HTML 特殊字符转义。 */
-    QString htmlEscape(const QString &value);
 
     /** @brief 初始化旧串口命令表。 */
     void setupCommandTable();
@@ -314,12 +312,11 @@ private:
     void finalizeSerialReport();
     /** @brief 刷新每个串口标签页中的可用端口候选项。 */
     void refreshSerialPortChoices();
-    /** @brief 将完整 UI 日志事件写入报告文件。 */
-    void writeEventLog(QTextStream &out) const;
+    /** @brief 将一条事件直接追加到对应端口的本地日志文件。 */
+    void appendLogFile(const QString &portTag, const QString &line);
 
 private:
     Ui::MainWindow *ui = nullptr;                         ///< Qt Designer 生成的控件集合。
-    QThread *m_commThread = nullptr;                      ///< 旧单 worker 使用的线程。
     QObject *m_workerObject = nullptr;                    ///< 旧单 worker 的通用指针。
     ICommunicationInterface *m_commInterface = nullptr;   ///< 旧单 worker 的通信接口指针。
     bool m_connected = false;                              ///< 当前模式的全局连接标志。
@@ -349,7 +346,6 @@ private:
     QPushButton *m_serialRefreshButton = nullptr;           ///< 串口刷新按钮。
     QPushButton *m_serialSendAllButton = nullptr;           ///< 串口全局 Send All 按钮。
     QTimer *m_serialHotplugTimer = nullptr;                 ///< 串口热插拔轮询定时器。
-    QStringList m_logHistory;                               ///< 日志区域的完整纯文本事件记录。
 };
 
 END_NAMESPACE_CIQTEK

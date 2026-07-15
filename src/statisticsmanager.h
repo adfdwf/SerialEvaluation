@@ -52,6 +52,10 @@ struct StatisticsSnapshot
     double p90Ms = 0.0;             ///< 90 分位往返耗时。
     double p95Ms = 0.0;             ///< 95 分位往返耗时。
     double p99Ms = 0.0;             ///< 99 分位往返耗时。
+    quint64 totalSentBytes = 0;     ///< 已提交到底层 I/O 的发送字节数。
+    quint64 totalReceivedBytes = 0; ///< 已从底层 I/O 读取的接收字节数。
+    double txBytesPerSecond = 0.0;  ///< 从测试开始计算的发送吞吐量（字节/秒）。
+    double rxBytesPerSecond = 0.0;  ///< 从测试开始计算的接收吞吐量（字节/秒）。
 };
 
 /**

@@ -1,130 +1,155 @@
-﻿#include "serialclientworker.h"
+#include "serialclientworker.h"
 
+#include <QElapsedTimer>
+#include <algorithm>
+#include <chrono>
 #include <utility>
 
 BEGIN_NAMESPACE_CIQTEK
 
-/**
- * @brief 保存串口配置并创建 worker。
- * @param settings 串口配置。
- * @param parent Qt 父对象。
- */
 SerialClientWorker::SerialClientWorker(SerialSettings settings, QObject *parent)
-    : QObject(parent), m_settings(std::move(settings))
+    : QObject(parent), m_settings(std::move(settings)), m_ioThread(&SerialClientWorker::ioLoop, this)
 {
 }
 
-/**
- * @brief 关闭串口并释放串口对象。
- */
 SerialClientWorker::~SerialClientWorker()
 {
-    disconnect();
-    delete m_serial;
+    m_stopping.store(true, std::memory_order_release);
+    m_queueCondition.notify_all();
+    if (m_ioThread.joinable()) {
+        m_ioThread.join();
+    }
 }
 
-/**
- * @brief 创建 QSerialPort，连接事件并按配置打开设备。
- */
+void SerialClientWorker::setReceiveTimeout(int timeoutMs)
+{
+    m_receiveTimeoutMs.store(std::max(1, timeoutMs), std::memory_order_release);
+}
+
 void SerialClientWorker::connect()
 {
-    if (!m_serial) {
-        // QSerialPort 必须在 worker 线程中创建，才能在该线程接收 readyRead 事件。
-        m_serial = new QSerialPort();
-        m_serial->moveToThread(thread());
-
-        // readyRead 可能一次返回多个字节块，当前 worker 将可读数据全部交给上层。
-        QObject::connect(m_serial, &QSerialPort::readyRead, this, [this]() {
-            emit signalDataReceived(m_serial->readAll());
-        });
-        // 转发底层写入完成事件。
-        QObject::connect(m_serial, &QSerialPort::bytesWritten, this, &SerialClientWorker::signalBytesWritten);
-        QObject::connect(m_serial,
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
-                         &QSerialPort::errorOccurred,
-#else
-                         QOverload<QSerialPort::SerialPortError>::of(&QSerialPort::error),
-#endif
-                         this,
-                         [this](QSerialPort::SerialPortError error) {
-                             if (error == QSerialPort::NoError) {
-                                 return;
-                             }
-
-                             const QString message = m_serial ? m_serial->errorString() : QStringLiteral("Serial port error");
-                             const bool wasOpen = m_serial && m_serial->isOpen();
-                             emit signalErrorOccurred(message);
-                             // 资源错误通常表示热插拔或系统级断开，主动关闭并通知 UI。
-                             if (wasOpen && (error == QSerialPort::ResourceError ||
-                                             error == QSerialPort::DeviceNotFoundError ||
-                                             error == QSerialPort::PermissionError)) {
-                                 m_serial->close();
-                                 emit signalDisconnected();
-                             }
-                         });
-    }
-
-    // 已打开时不重复配置或打开串口。
-    if (m_serial->isOpen()) {
-        return;
-    }
-
-    // 将 UI 中的配置转换为 QSerialPort 的运行参数。
-    m_serial->setPortName(m_settings.portName);
-    m_serial->setBaudRate(m_settings.baudRate);
-    m_serial->setDataBits(static_cast<QSerialPort::DataBits>(m_settings.dataBits));
-    m_serial->setStopBits(static_cast<QSerialPort::StopBits>(m_settings.stopBits));
-    m_serial->setParity(static_cast<QSerialPort::Parity>(m_settings.parity));
-    m_serial->setFlowControl(QSerialPort::NoFlowControl);
-
-    if (!m_serial->open(QIODevice::ReadWrite)) {
-        emit signalErrorOccurred(QStringLiteral("Failed to open serial port: %1").arg(m_serial->errorString()));
-        return;
-    }
-
-    emit signalConnected();
+    enqueue({TaskType::Connect, {}});
 }
 
-/**
- * @brief 关闭串口并通知主窗口。
- */
 void SerialClientWorker::disconnect()
 {
-    if (!m_serial || !m_serial->isOpen()) {
-        return;
-    }
-
-    m_serial->close();
-    emit signalDisconnected();
+    enqueue({TaskType::Disconnect, {}});
 }
 
-/**
- * @brief 向已打开的串口写入数据。
- * @param data 待发送的字节数组。
- */
 void SerialClientWorker::sendData(const QByteArray &data)
 {
-    if (!m_serial || !m_serial->isOpen()) {
-        emit signalErrorOccurred(QStringLiteral("Serial port is not connected; send failed"));
-        return;
-    }
-
-    const qint64 written = m_serial->write(data);
-    if (written < 0) {
-        emit signalErrorOccurred(QStringLiteral("Serial port write failed: %1").arg(m_serial->errorString()));
-        return;
-    }
-
-    m_serial->flush();
+    enqueue({TaskType::Send, data});
 }
 
-/**
- * @brief 查询串口当前是否已打开。
- * @return true 表示 QSerialPort 已打开。
- */
 bool SerialClientWorker::isConnected() const
 {
-    return m_serial && m_serial->isOpen();
+    return m_connected.load(std::memory_order_acquire);
+}
+
+void SerialClientWorker::enqueue(Task task)
+{
+    if (m_stopping.load(std::memory_order_acquire)) return;
+    {
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_tasks.emplace_back(std::move(task));
+    }
+    m_queueCondition.notify_one();
+}
+
+void SerialClientWorker::ioLoop()
+{
+    QSerialPort serial;
+    bool connected = false;
+    bool waitingForResponse = false;
+    QElapsedTimer responseTimer;
+
+    const auto closeSerial = [&]() {
+        const bool wasConnected = connected;
+        if (serial.isOpen()) serial.close();
+        connected = false;
+        m_connected.store(false, std::memory_order_release);
+        waitingForResponse = false;
+        if (wasConnected) emit signalDisconnected();
+    };
+
+    while (!m_stopping.load(std::memory_order_acquire)) {
+        Task task{TaskType::Disconnect, {}};
+        bool hasTask = false;
+        {
+            std::unique_lock<std::mutex> lock(m_queueMutex);
+            m_queueCondition.wait_for(lock, std::chrono::milliseconds(5), [&]() {
+                return m_stopping.load(std::memory_order_acquire) || !m_tasks.empty();
+            });
+            if (!m_tasks.empty()) {
+                task = std::move(m_tasks.front());
+                m_tasks.pop_front();
+                hasTask = true;
+            }
+        }
+
+        if (hasTask) {
+            if (task.type == TaskType::Connect) {
+                if (!connected) {
+                    serial.setPortName(m_settings.portName);
+                    serial.setBaudRate(m_settings.baudRate);
+                    serial.setDataBits(static_cast<QSerialPort::DataBits>(m_settings.dataBits));
+                    serial.setStopBits(static_cast<QSerialPort::StopBits>(m_settings.stopBits));
+                    serial.setParity(static_cast<QSerialPort::Parity>(m_settings.parity));
+                    serial.setFlowControl(QSerialPort::NoFlowControl);
+                    if (serial.open(QIODevice::ReadWrite)) {
+                        connected = true;
+                        m_connected.store(true, std::memory_order_release);
+                        emit signalConnected();
+                    } else if (!m_stopping.load(std::memory_order_acquire)) {
+                        emit signalErrorOccurred(QStringLiteral("Failed to open serial port: %1").arg(serial.errorString()));
+                    }
+                }
+            } else if (task.type == TaskType::Disconnect) {
+                closeSerial();
+            } else if (task.type == TaskType::Send) {
+                if (!connected) {
+                    emit signalErrorOccurred(QStringLiteral("Serial port is not connected; send failed"));
+                } else {
+                    qint64 totalWritten = 0;
+                    bool writeOk = true;
+                    while (totalWritten < task.data.size()) {
+                        const qint64 written = serial.write(task.data.constData() + totalWritten, task.data.size() - totalWritten);
+                        if (written <= 0 || !serial.waitForBytesWritten(1000)) {
+                            writeOk = false;
+                            break;
+                        }
+                        totalWritten += written;
+                    }
+                    if (!writeOk) {
+                        emit signalErrorOccurred(QStringLiteral("Serial port write failed: %1").arg(serial.errorString()));
+                    } else {
+                        emit signalBytesWritten(totalWritten);
+                        waitingForResponse = true;
+                        responseTimer.restart();
+                    }
+                }
+            }
+        }
+
+        if (connected) {
+            const int pollMs = waitingForResponse
+                ? std::max(1, std::min(10, m_receiveTimeoutMs.load(std::memory_order_acquire) - static_cast<int>(responseTimer.elapsed())))
+                : 5;
+            if (serial.waitForReadyRead(pollMs)) {
+                const QByteArray data = serial.readAll();
+                if (!data.isEmpty()) {
+                    waitingForResponse = false;
+                    emit signalDataReceived(data);
+                }
+            }
+            if (waitingForResponse && responseTimer.elapsed() >= m_receiveTimeoutMs.load(std::memory_order_acquire)) {
+                waitingForResponse = false;
+            }
+            if (!serial.isOpen()) closeSerial();
+        }
+    }
+
+    closeSerial();
 }
 
 END_NAMESPACE_CIQTEK
