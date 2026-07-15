@@ -400,6 +400,10 @@ void MainWindow::slotModeChanged(int index)
     ui->widgetTcpConfig->setVisible(!serialMode);
     ui->widgetSerialConfig->setVisible(false);
     ui->groupBoxCommands->setVisible(false);
+    // Serial mode displays a dedicated statistics card inside every serial
+    // port tab. Hide the TCP-oriented aggregate panel to avoid duplicate and
+    // misleading global statistics; it is restored when switching back.
+    ui->groupBoxStats->setVisible(!serialMode);
     if (m_serialPortBox) {
         m_serialPortBox->setVisible(serialMode);
     }
