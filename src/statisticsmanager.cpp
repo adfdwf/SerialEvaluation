@@ -128,6 +128,20 @@ bool StatisticsManager::hasPendingPackets() const
 }
 
 /**
+ * @brief 统计当前尚未收到响应的数据包数量。
+ */
+int StatisticsManager::pendingPacketCount() const
+{
+    int pending = 0;
+    for (const PacketInfo &packet : m_packets) {
+        if (packet.status == PacketInfo::Status::Pending) {
+            ++pending;
+        }
+    }
+    return pending;
+}
+
+/**
  * @brief 汇总当前记录并计算线性插值分位数。
  */
 StatisticsSnapshot StatisticsManager::snapshot() const

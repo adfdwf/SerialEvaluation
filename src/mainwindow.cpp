@@ -29,6 +29,18 @@
 
 BEGIN_NAMESPACE_CIQTEK
 
+namespace {
+
+/**
+ * @brief 单个端口允许同时等待的响应数量。
+ *
+ * 采用请求-响应背压，避免 Interval 小于服务端处理时间时无限堆积 TCP/串口
+ * 数据；这样下一个命令只有在上一个响应完成后才会进入传输层。
+ */
+constexpr int kMaxInFlightPackets = 1;
+
+} // namespace
+
 /**
  * @file mainwindow.cpp
  * @brief 实现 TCP 多端口和串口多端口性能测试主界面。
@@ -1489,6 +1501,11 @@ void MainWindow::sendNextSerialPacket(SerialPortSession *session)
         return;
     }
     const int targetCount = ui->spinBoxSendCount->value();
+    const int intervalMs = ui->spinBoxInterval->value();
+    if (session->statistics.pendingPacketCount() >= kMaxInFlightPackets) {
+        scheduleNextSerialPacket(session, qMax(1, intervalMs));
+        return;
+    }
     if (session->perCommandSendCount.size() != commands.size()) session->perCommandSendCount = QVector<int>(commands.size(), 0);
     int checked = 0;
     while (checked < commands.size() && targetCount > 0 && session->perCommandSendCount.value(session->currentCommandIndex) >= targetCount) {
@@ -1723,6 +1740,10 @@ void MainWindow::sendNextTcpPacket(TcpPortSession *session)
         return;
     }
     const int intervalMs = ui->spinBoxInterval->value();
+    if (session->statistics.pendingPacketCount() >= kMaxInFlightPackets) {
+        scheduleNextTcpPacket(session, qMax(1, intervalMs));
+        return;
+    }
     const int targetCount = ui->spinBoxSendCount->value();
     if (session->perCommandSendCount.size() != commands.size()) session->perCommandSendCount = QVector<int>(commands.size(), 0);
     int checked = 0;
@@ -2403,36 +2424,6 @@ void MainWindow::finalizeTestReport()
     out << QStringLiteral("P95: %1 ms\n").arg(snap.p95Ms, 0, 'f', 3);
     out << QStringLiteral("P99: %1 ms\n").arg(snap.p99Ms, 0, 'f', 3);
 
-    out << QStringLiteral("\n--- Packet Details ---\n");
-    for (const PacketInfo &packet : m_statistics.packets()) {
-        QString statusStr;
-        switch (packet.status) {
-        case PacketInfo::Status::Pending:
-            statusStr = QStringLiteral("PENDING");
-            break;
-        case PacketInfo::Status::Success:
-            statusStr = QStringLiteral("SUCCESS");
-            break;
-        case PacketInfo::Status::Timeout:
-            statusStr = QStringLiteral("TIMEOUT");
-            break;
-        }
-
-        QString txData = QString::fromUtf8(packet.txPayload);
-        if (packet.txFormat == QStringLiteral("HEX")) {
-            txData = QString::fromLatin1(packet.txPayload.toHex(' ').toUpper());
-        }
-        txData.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
-        txData.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
-
-        out << QStringLiteral("#%1 %2 %3 ms | Format: %4 | TX Data: %5\n")
-                   .arg(packet.id)
-                   .arg(statusStr)
-                   .arg(packet.elapsedMs >= 0 ? QString::number(packet.elapsedMs) : QStringLiteral("-"))
-                   .arg(packet.txFormat.isEmpty() ? QStringLiteral("UNKNOWN") : packet.txFormat)
-                   .arg(txData);
-    }
-
     appendLog(LogLevel::Info, QStringLiteral("Test report saved: %1").arg(filePath));
     writeEventLog(out);
     file.close();
@@ -2472,17 +2463,6 @@ void MainWindow::finalizeSerialReport()
         }
         const StatisticsSnapshot snap = session->statistics.snapshot();
         out << QStringLiteral("Total Sent: %1\nSuccess RX: %2\nLost: %3\nSuccess Rate: %4%\nAverage: %5 ms\nMax: %6 ms\nMin: %7 ms\nP50: %8 ms\nP90: %9 ms\nP95: %10 ms\nP99: %11 ms\n").arg(snap.totalSent).arg(snap.successReceived).arg(snap.lostPackets).arg(snap.successRate, 0, 'f', 2).arg(snap.averageElapsedMs, 0, 'f', 3).arg(snap.maxElapsedMs).arg(snap.minElapsedMs).arg(snap.p50Ms, 0, 'f', 3).arg(snap.p90Ms, 0, 'f', 3).arg(snap.p95Ms, 0, 'f', 3).arg(snap.p99Ms, 0, 'f', 3);
-        out << QStringLiteral("Packet Details:\n");
-        for (const PacketInfo &packet : session->statistics.packets()) {
-            QString txData = packet.txFormat == QStringLiteral("HEX") ? QString::fromLatin1(packet.txPayload.toHex(' ').toUpper()) : QString::fromUtf8(packet.txPayload);
-            txData.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
-            txData.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
-            QString rxData = packet.txFormat == QStringLiteral("HEX") ? QString::fromLatin1(packet.rxPayload.toHex(' ').toUpper()) : QString::fromUtf8(packet.rxPayload);
-            rxData.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
-            rxData.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
-            const QString status = packet.status == PacketInfo::Status::Success ? QStringLiteral("SUCCESS") : packet.status == PacketInfo::Status::Timeout ? QStringLiteral("TIMEOUT") : QStringLiteral("PENDING");
-            out << QStringLiteral("[%1] #%2 %3 %4 ms | Format: %5 | TX Data: %6 | RX Data: %7\n").arg(session->portName).arg(packet.id).arg(status).arg(packet.elapsedMs >= 0 ? QString::number(packet.elapsedMs) : QStringLiteral("-")).arg(packet.txFormat.isEmpty() ? QStringLiteral("UNKNOWN") : packet.txFormat).arg(txData).arg(rxData.isEmpty() ? QStringLiteral("-") : rxData);
-        }
         out << QLatin1Char('\n');
     }
     appendLog(LogLevel::Info, QStringLiteral("Multi-serial report saved: %1").arg(file.fileName()));
@@ -2541,22 +2521,6 @@ void MainWindow::finalizeTcpReport()
         out << QStringLiteral("P90: %1 ms\n").arg(snap.p90Ms, 0, 'f', 3);
         out << QStringLiteral("P95: %1 ms\n").arg(snap.p95Ms, 0, 'f', 3);
         out << QStringLiteral("P99: %1 ms\n").arg(snap.p99Ms, 0, 'f', 3);
-        out << QStringLiteral("Packet Details:\n");
-        for (const PacketInfo &packet : session->statistics.packets()) {
-            QString data = packet.txFormat == QStringLiteral("HEX")
-                ? QString::fromLatin1(packet.txPayload.toHex(' ').toUpper())
-                : QString::fromUtf8(packet.txPayload);
-            data.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
-            data.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
-            const QString status = packet.status == PacketInfo::Status::Success ? QStringLiteral("SUCCESS")
-                : packet.status == PacketInfo::Status::Timeout ? QStringLiteral("TIMEOUT") : QStringLiteral("PENDING");
-            out << QStringLiteral("#%1 %2 %3 ms | Format: %4 | TX Data: %5\n")
-                       .arg(packet.id).arg(status)
-                       .arg(packet.elapsedMs >= 0 ? QString::number(packet.elapsedMs) : QStringLiteral("-"))
-                       .arg(packet.txFormat.isEmpty() ? QStringLiteral("UNKNOWN") : packet.txFormat)
-                       .arg(data);
-        }
-        out << QLatin1Char('\n');
     }
     appendLog(LogLevel::Info, QStringLiteral("Multi-port test report saved: %1").arg(file.fileName()));
     writeEventLog(out);
@@ -2627,9 +2591,22 @@ QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &f
     constexpr int kPreviewBytes = 256;
     if (format.trimmed().compare(QStringLiteral("ASCII"), Qt::CaseInsensitive) == 0) {
         const auto decodeAscii = [](const QByteArray &bytes) {
-            QString text = QString::fromUtf8(bytes);
-            text.replace(QLatin1Char('\r'), QStringLiteral("\\r"));
-            text.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+            QString text;
+            text.reserve(bytes.size());
+            for (const unsigned char byte : bytes) {
+                if (byte == '\r') {
+                    text += QStringLiteral("\\r");
+                } else if (byte == '\n') {
+                    text += QStringLiteral("\\n");
+                } else if (byte == '\t') {
+                    text += QStringLiteral("\\t");
+                } else if (byte >= 0x20 && byte <= 0x7E) {
+                    text += QChar(byte);
+                } else {
+                    // 非 ASCII/不可打印字节使用转义形式，避免 UTF-8 替换字符乱码。
+                    text += QStringLiteral("\\x%1").arg(byte, 2, 16, QLatin1Char('0'));
+                }
+            }
             return text;
         };
 

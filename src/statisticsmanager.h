@@ -107,6 +107,12 @@ public:
     bool hasPendingPackets() const;
 
     /**
+     * @brief 返回当前仍在等待响应的数据包数量。
+     * @return Pending 数据包数。
+     */
+    int pendingPacketCount() const;
+
+    /**
      * @brief 根据当前记录计算总数、成功率、平均值和 P50/P90/P95/P99。
      * @return 当前测试统计快照。
      */
