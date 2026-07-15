@@ -3,6 +3,7 @@
 
 #include "icommunicationinterface.h"
 #include "namespace.h"
+#include "statisticsmanager.h"
 
 #include <QObject>
 #include <QString>
@@ -32,6 +33,12 @@ public:
 
     /** @brief 设置 I/O 线程等待响应的超时时间（毫秒）。 */
     void setReceiveTimeout(int timeoutMs);
+    /** @brief 清空本端口线程的统计数据。 */
+    void resetStatistics();
+    /** @brief 结束本轮统计并返回最终快照。 */
+    StatisticsSnapshot finalStatisticsSnapshot();
+    /** @brief 将带格式信息的发送任务放入队列。 */
+    void sendDataWithFormat(const QByteArray &data, const QString &format);
 
 public Q_SLOTS:
     /** @brief 将连接请求放入线程安全任务队列。 */
@@ -49,10 +56,11 @@ Q_SIGNALS:
     void signalDataReceived(const QByteArray &data);
     void signalErrorOccurred(const QString &message);
     void signalBytesWritten(qint64 bytes);
+    void signalReceiveTimeout();
 
 private:
     enum class TaskType { Connect, Disconnect, Send };
-    struct Task { TaskType type; QByteArray data; };
+    struct Task { TaskType type; QByteArray data; QString format; };
 
     void enqueue(Task task);
     void ioLoop();
@@ -66,6 +74,8 @@ private:
     std::condition_variable m_queueCondition;
     std::deque<Task> m_tasks;
     std::thread m_ioThread;
+    mutable std::mutex m_statsMutex;
+    StatisticsManager m_statistics;
 };
 
 END_NAMESPACE_CIQTEK

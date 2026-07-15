@@ -1,6 +1,7 @@
 ﻿#include "statisticsmanager.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 BEGIN_NAMESPACE_CIQTEK
@@ -150,9 +151,9 @@ StatisticsSnapshot StatisticsManager::snapshot() const
     StatisticsSnapshot snap;
     snap.totalSent = static_cast<quint64>(m_packets.size());
 
-    qint64 sum = 0;                                      // 成功 RTT 的总和。
-    qint64 minValue = std::numeric_limits<qint64>::max(); // 成功 RTT 的最小值。
-    qint64 maxValue = 0;                                  // 成功 RTT 的最大值。
+    qint64 sum = 0;                                       // 成功 RTT 的总和。
+    qint64 minValue = std::numeric_limits<qint64>::max(); // 成功响应耗时中的最小值。
+    qint64 maxValue = 0;                                  // 成功响应耗时中的最大值。
 
     for (const PacketInfo &packet : m_packets) {
         snap.totalSentBytes += static_cast<quint64>(packet.txPayload.size());
@@ -188,14 +189,12 @@ StatisticsSnapshot StatisticsManager::snapshot() const
 
         // n 是成功响应样本数量。
         const int n = elapsedList.size();
-        // percentile 使用相邻样本线性插值，避免小样本分位数跳变过大。
+        // percentile 使用最近秩法：按 1-based 的 ceil(P*N) 位置取整数耗时，
+        // 不做线性插值，因此 P50/P90/P95/P99 不会产生小数。
         auto percentile = [&](double p) -> double {
             if (n == 0) return 0.0;
-            const double rank = p * (n - 1); // 分位点在有序数组中的实数下标。
-            const int lo = static_cast<int>(rank); // 分位点左侧样本下标。
-            const int hi = qMin(lo + 1, n - 1);   // 分位点右侧样本下标。
-            const double frac = rank - lo;        // 插值比例。
-            return static_cast<double>(elapsedList[lo]) * (1.0 - frac) + static_cast<double>(elapsedList[hi]) * frac;
+            const int oneBasedRank = qBound(1, static_cast<int>(std::ceil(p * n)), n);
+            return static_cast<double>(elapsedList.at(oneBasedRank - 1));
         };
 
         snap.p50Ms = percentile(0.50);

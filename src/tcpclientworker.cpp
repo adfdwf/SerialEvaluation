@@ -29,6 +29,19 @@ void TcpClientWorker::setReceiveTimeout(int timeoutMs)
     m_receiveTimeoutMs.store(std::max(1, timeoutMs), std::memory_order_release);
 }
 
+void TcpClientWorker::resetStatistics()
+{
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_statistics.reset();
+}
+
+StatisticsSnapshot TcpClientWorker::finalStatisticsSnapshot()
+{
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_statistics.markAllPendingLost();
+    return m_statistics.snapshot();
+}
+
 void TcpClientWorker::connect()
 {
     enqueue({TaskType::Connect, {}});
@@ -41,7 +54,12 @@ void TcpClientWorker::disconnect()
 
 void TcpClientWorker::sendData(const QByteArray &data)
 {
-    enqueue({TaskType::Send, data});
+    sendDataWithFormat(data, QString());
+}
+
+void TcpClientWorker::sendDataWithFormat(const QByteArray &data, const QString &format)
+{
+    enqueue({TaskType::Send, data, format});
 }
 
 bool TcpClientWorker::isConnected() const
@@ -65,6 +83,9 @@ void TcpClientWorker::ioLoop()
     ProtocolFrameDecoder decoder;
     bool connected = false;
     bool waitingForResponse = false;
+    bool expectProtocolFrame = false;
+    int expectedResponseBytes = 0;
+    QByteArray rawResponseBuffer;
     QElapsedTimer responseTimer;
 
     const auto closeSocket = [&]() {
@@ -77,12 +98,15 @@ void TcpClientWorker::ioLoop()
         connected = false;
         m_connected.store(false, std::memory_order_release);
         decoder.clear();
+        rawResponseBuffer.clear();
+        expectedResponseBytes = 0;
+        expectProtocolFrame = false;
         waitingForResponse = false;
         if (wasConnected) emit signalDisconnected();
     };
 
     while (!m_stopping.load(std::memory_order_acquire)) {
-        Task task{TaskType::Disconnect, {}};
+        Task task{TaskType::Disconnect, {}, {}};
         bool hasTask = false;
         {
             std::unique_lock<std::mutex> lock(m_queueMutex);
@@ -123,6 +147,10 @@ void TcpClientWorker::ioLoop()
                 if (!connected) {
                     emit signalErrorOccurred(QStringLiteral("TCP is not connected; send failed"));
                 } else {
+                    {
+                        std::lock_guard<std::mutex> lock(m_statsMutex);
+                        m_statistics.recordSend(task.data, task.format);
+                    }
                     qint64 totalWritten = 0;
                     bool writeOk = true;
                     while (totalWritten < task.data.size()) {
@@ -134,10 +162,19 @@ void TcpClientWorker::ioLoop()
                         totalWritten += written;
                     }
                     if (!writeOk) {
+                        std::lock_guard<std::mutex> lock(m_statsMutex);
+                        m_statistics.markAllPendingLost();
                         emit signalErrorOccurred(QStringLiteral("TCP write failed: %1").arg(socket.errorString()));
                     } else {
                         socket.flush();
                         emit signalBytesWritten(totalWritten);
+                        expectProtocolFrame = task.format.compare(QStringLiteral("HEX"), Qt::CaseInsensitive) == 0 &&
+                                              task.data.size() >= 2 &&
+                                              static_cast<quint8>(task.data.at(0)) == 0xA0 &&
+                                              static_cast<quint8>(task.data.at(1)) == 0x81;
+                        expectedResponseBytes = task.data.size();
+                        rawResponseBuffer.clear();
+                        decoder.clear();
                         waitingForResponse = true;
                         responseTimer.restart();
                     }
@@ -151,15 +188,46 @@ void TcpClientWorker::ioLoop()
                 ? std::max(1, std::min(10, m_receiveTimeoutMs.load(std::memory_order_acquire) - static_cast<int>(responseTimer.elapsed())))
                 : 5;
             if (socket.waitForReadyRead(pollMs)) {
-                const ProtocolFrameDecoder::DecodeResult result = decoder.appendData(socket.readAll());
-                for (const QString &error : result.errors) emit signalErrorOccurred(error);
-                for (const QByteArray &frame : result.frames) {
-                    waitingForResponse = false;
-                    emit signalDataReceived(frame);
+                const QByteArray receivedChunk = socket.readAll();
+                if (waitingForResponse && !expectProtocolFrame) {
+                    rawResponseBuffer.append(receivedChunk);
+                    if (rawResponseBuffer.size() >= expectedResponseBytes) {
+                        const QByteArray completeResponse = rawResponseBuffer.left(expectedResponseBytes);
+                        const int extraBytes = rawResponseBuffer.size() - expectedResponseBytes;
+                        if (extraBytes > 0) {
+                            emit signalErrorOccurred(QStringLiteral("TCP sticky packet detected; %1 extra bytes discarded").arg(extraBytes));
+                        }
+                        rawResponseBuffer.clear();
+                        {
+                            std::lock_guard<std::mutex> lock(m_statsMutex);
+                            m_statistics.recordReceive(completeResponse);
+                        }
+                        waitingForResponse = false;
+                        emit signalDataReceived(completeResponse);
+                    }
+                } else {
+                    const ProtocolFrameDecoder::DecodeResult result = decoder.appendData(receivedChunk);
+                    for (const QString &error : result.errors) emit signalErrorOccurred(error);
+                    if (result.frames.size() > 1) {
+                        emit signalErrorOccurred(QStringLiteral("TCP sticky packet detected; split into %1 frames").arg(result.frames.size()));
+                    }
+                    for (const QByteArray &frame : result.frames) {
+                        {
+                            std::lock_guard<std::mutex> lock(m_statsMutex);
+                            m_statistics.recordReceive(frame);
+                        }
+                        waitingForResponse = false;
+                        emit signalDataReceived(frame);
+                    }
                 }
             }
             if (waitingForResponse && responseTimer.elapsed() >= m_receiveTimeoutMs.load(std::memory_order_acquire)) {
                 waitingForResponse = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_statsMutex);
+                    m_statistics.markTimeouts(m_receiveTimeoutMs.load(std::memory_order_acquire));
+                }
+                emit signalReceiveTimeout();
             }
             if (socket.state() == QAbstractSocket::UnconnectedState) closeSocket();
         }

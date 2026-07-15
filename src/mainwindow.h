@@ -26,6 +26,7 @@ class QPushButton;
 class QComboBox;
 class QGroupBox;
 class QTextStream;
+class QTextEdit;
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -48,6 +49,7 @@ struct TcpPortSession {
     bool connecting = false;                  ///< 是否正在连接。
     QTimer *sendTimer = nullptr;              ///< 连续发送和单次发送共用的精准定时器。
     QTableWidget *commandTable = nullptr;     ///< 当前端口的命令表格。
+    QTextEdit *logEdit = nullptr;              ///< 当前 TCP 端口独立日志区域。
     QWidget *commandPage = nullptr;           ///< 当前端口的标签页。
     StatisticsManager statistics;             ///< 当前端口独立统计管理器。
     QElapsedTimer sendClock;                  ///< 当前端口的发送调度单调时钟。
@@ -70,6 +72,7 @@ struct SerialPortSession {
     bool connecting = false;                  ///< 是否正在打开串口。
     QTimer *sendTimer = nullptr;              ///< 该串口的精准发送定时器。
     QTableWidget *commandTable = nullptr;     ///< 该串口独立命令表格。
+    QTextEdit *logEdit = nullptr;              ///< 当前串口独立日志区域。
     QWidget *commandPage = nullptr;           ///< 该串口独立标签页。
     QComboBox *portCombo = nullptr;            ///< 串口名称展示控件。
     QComboBox *baudCombo = nullptr;            ///< 波特率选择控件。
@@ -314,6 +317,8 @@ private:
     void refreshSerialPortChoices();
     /** @brief 将一条事件直接追加到对应端口的本地日志文件。 */
     void appendLogFile(const QString &portTag, const QString &line);
+    /** @brief 将端口日志事件显示到对应的独立日志区域。 */
+    void appendPortLog(const QString &portTag, const QString &line, const QString &color);
 
 private:
     Ui::MainWindow *ui = nullptr;                         ///< Qt Designer 生成的控件集合。
@@ -346,6 +351,8 @@ private:
     QPushButton *m_serialRefreshButton = nullptr;           ///< 串口刷新按钮。
     QPushButton *m_serialSendAllButton = nullptr;           ///< 串口全局 Send All 按钮。
     QTimer *m_serialHotplugTimer = nullptr;                 ///< 串口热插拔轮询定时器。
+    QHash<quint16, StatisticsSnapshot> m_tcpFinalStats;     ///< TCP worker 停止时返回的最终统计。
+    QHash<QString, StatisticsSnapshot> m_serialFinalStats;  ///< 串口 worker 停止时返回的最终统计。
 };
 
 END_NAMESPACE_CIQTEK

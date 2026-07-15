@@ -37,7 +37,7 @@ struct PacketInfo
 };
 
 /**
- * @brief 一次测试的实时统计快照。
+ * @brief 一次测试结束后的统计快照。
  */
 struct StatisticsSnapshot
 {
@@ -46,8 +46,8 @@ struct StatisticsSnapshot
     quint64 lostPackets = 0;       ///< 超时或断开导致丢失的数据包数。
     double successRate = 0.0;      ///< 成功率，范围为 0 到 100。
     double averageElapsedMs = 0.0; ///< 成功数据包的平均往返耗时。
-    qint64 minElapsedMs = 0;        ///< 成功数据包的最小往返耗时。
-    qint64 maxElapsedMs = 0;        ///< 成功数据包的最大往返耗时。
+    qint64 minElapsedMs = 0;        ///< 所有成功响应记录中的最小耗时。
+    qint64 maxElapsedMs = 0;        ///< 所有成功响应记录中的最大耗时。
     double p50Ms = 0.0;             ///< 50 分位往返耗时。
     double p90Ms = 0.0;             ///< 90 分位往返耗时。
     double p95Ms = 0.0;             ///< 95 分位往返耗时。
@@ -61,7 +61,7 @@ struct StatisticsSnapshot
 /**
  * @brief 管理发送记录、响应匹配、超时状态和分位数统计。
  *
- * 该类要求所有函数在 UI 线程调用。响应没有内置序列号时，使用发送顺序
+ * 调用方应保证同一实例由一个统计线程访问；响应没有内置序列号时，使用发送顺序
  * 与响应顺序进行 FIFO 匹配；RTT 使用单调时钟，避免系统时间调整造成误差。
  */
 class StatisticsManager final : public QObject

@@ -26,6 +26,19 @@ void SerialClientWorker::setReceiveTimeout(int timeoutMs)
     m_receiveTimeoutMs.store(std::max(1, timeoutMs), std::memory_order_release);
 }
 
+void SerialClientWorker::resetStatistics()
+{
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_statistics.reset();
+}
+
+StatisticsSnapshot SerialClientWorker::finalStatisticsSnapshot()
+{
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_statistics.markAllPendingLost();
+    return m_statistics.snapshot();
+}
+
 void SerialClientWorker::connect()
 {
     enqueue({TaskType::Connect, {}});
@@ -38,7 +51,12 @@ void SerialClientWorker::disconnect()
 
 void SerialClientWorker::sendData(const QByteArray &data)
 {
-    enqueue({TaskType::Send, data});
+    sendDataWithFormat(data, QString());
+}
+
+void SerialClientWorker::sendDataWithFormat(const QByteArray &data, const QString &format)
+{
+    enqueue({TaskType::Send, data, format});
 }
 
 bool SerialClientWorker::isConnected() const
@@ -61,6 +79,8 @@ void SerialClientWorker::ioLoop()
     QSerialPort serial;
     bool connected = false;
     bool waitingForResponse = false;
+    int expectedResponseBytes = 0;
+    QByteArray responseBuffer;
     QElapsedTimer responseTimer;
 
     const auto closeSerial = [&]() {
@@ -68,12 +88,14 @@ void SerialClientWorker::ioLoop()
         if (serial.isOpen()) serial.close();
         connected = false;
         m_connected.store(false, std::memory_order_release);
+        expectedResponseBytes = 0;
+        responseBuffer.clear();
         waitingForResponse = false;
         if (wasConnected) emit signalDisconnected();
     };
 
     while (!m_stopping.load(std::memory_order_acquire)) {
-        Task task{TaskType::Disconnect, {}};
+        Task task{TaskType::Disconnect, {}, {}};
         bool hasTask = false;
         {
             std::unique_lock<std::mutex> lock(m_queueMutex);
@@ -110,6 +132,10 @@ void SerialClientWorker::ioLoop()
                 if (!connected) {
                     emit signalErrorOccurred(QStringLiteral("Serial port is not connected; send failed"));
                 } else {
+                    {
+                        std::lock_guard<std::mutex> lock(m_statsMutex);
+                        m_statistics.recordSend(task.data, task.format);
+                    }
                     qint64 totalWritten = 0;
                     bool writeOk = true;
                     while (totalWritten < task.data.size()) {
@@ -121,9 +147,13 @@ void SerialClientWorker::ioLoop()
                         totalWritten += written;
                     }
                     if (!writeOk) {
+                        std::lock_guard<std::mutex> lock(m_statsMutex);
+                        m_statistics.markAllPendingLost();
                         emit signalErrorOccurred(QStringLiteral("Serial port write failed: %1").arg(serial.errorString()));
                     } else {
                         emit signalBytesWritten(totalWritten);
+                        expectedResponseBytes = task.data.size();
+                        responseBuffer.clear();
                         waitingForResponse = true;
                         responseTimer.restart();
                     }
@@ -137,13 +167,31 @@ void SerialClientWorker::ioLoop()
                 : 5;
             if (serial.waitForReadyRead(pollMs)) {
                 const QByteArray data = serial.readAll();
-                if (!data.isEmpty()) {
+                if (waitingForResponse && !data.isEmpty()) {
+                    responseBuffer.append(data);
+                }
+                if (waitingForResponse && expectedResponseBytes > 0 && responseBuffer.size() >= expectedResponseBytes) {
+                    const QByteArray completeResponse = responseBuffer.left(expectedResponseBytes);
+                    const int extraBytes = responseBuffer.size() - expectedResponseBytes;
+                    if (extraBytes > 0) {
+                        emit signalErrorOccurred(QStringLiteral("Serial sticky packet detected; %1 extra bytes discarded").arg(extraBytes));
+                    }
+                    responseBuffer.clear();
+                    {
+                        std::lock_guard<std::mutex> lock(m_statsMutex);
+                        m_statistics.recordReceive(completeResponse);
+                    }
                     waitingForResponse = false;
-                    emit signalDataReceived(data);
+                    emit signalDataReceived(completeResponse);
                 }
             }
             if (waitingForResponse && responseTimer.elapsed() >= m_receiveTimeoutMs.load(std::memory_order_acquire)) {
                 waitingForResponse = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_statsMutex);
+                    m_statistics.markTimeouts(m_receiveTimeoutMs.load(std::memory_order_acquire));
+                }
+                emit signalReceiveTimeout();
             }
             if (!serial.isOpen()) closeSerial();
         }
