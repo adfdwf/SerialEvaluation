@@ -1,15 +1,14 @@
-#include "tcpclientworker.h"
+﻿#include "tcpclientworker.h"
 
 #include <utility>
 
 BEGIN_NAMESPACE_CIQTEK
 
 /**
- * @brief  TcpClientWorker 默认构造函数
- * @param  host 目标主机地址
- * @param  port 目标端口号
- * @param  parent Qt父对象
- * @return void
+ * @brief 创建 TCP worker 并保存目标地址。
+ * @param host 目标主机地址。
+ * @param port 目标 TCP 端口。
+ * @param parent Qt 父对象。
  */
 TcpClientWorker::TcpClientWorker(QString host, quint16 port, QObject *parent)
     : QObject(parent), m_host(std::move(host)), m_port(port)
@@ -17,8 +16,7 @@ TcpClientWorker::TcpClientWorker(QString host, quint16 port, QObject *parent)
 }
 
 /**
- * @brief  ~TcpClientWorker 默认析构函数
- * @return void
+ * @brief 关闭连接并释放 socket。
  */
 TcpClientWorker::~TcpClientWorker()
 {
@@ -27,24 +25,27 @@ TcpClientWorker::~TcpClientWorker()
 }
 
 /**
- * @brief  connect 建立 TCP 连接
- * @return void
+ * @brief 创建 socket 并向目标主机发起异步连接。
  */
 void TcpClientWorker::connect()
 {
     if (!m_socket) {
+        // socket 必须在 worker 所在线程创建，保证 readyRead 等事件在该线程处理。
         m_socket = new QTcpSocket();
         m_socket->moveToThread(thread());
 
+        // 连接成功信号直接转发给主窗口。
         QObject::connect(m_socket, &QTcpSocket::connected, this, &TcpClientWorker::signalConnected);
+        // 断开时清理未完成帧并通知主窗口。
         QObject::connect(m_socket, &QTcpSocket::disconnected, this, [this]() {
             const int incompleteBytes = m_frameDecoder.bufferedByteCount();
             m_frameDecoder.clear();
             if (incompleteBytes > 0) {
-                emit signalErrorOccurred(QStringLiteral("TCP 连接断开，丢弃 %1 字节不完整响应帧").arg(incompleteBytes));
+                emit signalErrorOccurred(QStringLiteral("TCP connection closed; %1 bytes of incomplete response discarded").arg(incompleteBytes));
             }
             emit signalDisconnected();
         });
+        // readyRead 每次读取所有可用字节，再交给协议解码器处理粘包和拆包。
         QObject::connect(m_socket, &QTcpSocket::readyRead, this, [this]() {
             const ProtocolFrameDecoder::DecodeResult result = m_frameDecoder.appendData(m_socket->readAll());
             for (const QString &error : result.errors) {
@@ -54,6 +55,7 @@ void TcpClientWorker::connect()
                 emit signalDataReceived(frame);
             }
         });
+        // 将 socket 写入完成事件转发给上层。
         QObject::connect(m_socket, &QTcpSocket::bytesWritten, this, &TcpClientWorker::signalBytesWritten);
         QObject::connect(m_socket,
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
@@ -67,6 +69,7 @@ void TcpClientWorker::connect()
                          });
     }
 
+    // 已连接或正在连接时不重复发起连接请求。
     if (m_socket->state() == QAbstractSocket::ConnectedState ||
         m_socket->state() == QAbstractSocket::ConnectingState) {
         return;
@@ -77,8 +80,7 @@ void TcpClientWorker::connect()
 }
 
 /**
- * @brief  disconnect 断开 TCP 连接
- * @return void
+ * @brief 请求 socket 关闭 TCP 连接。
  */
 void TcpClientWorker::disconnect()
 {
@@ -92,20 +94,19 @@ void TcpClientWorker::disconnect()
 }
 
 /**
- * @brief  sendData 发送 TCP 数据
- * @param  data 待发送字节数据
- * @return void
+ * @brief 向已连接 socket 写入一段原始 TCP 数据。
+ * @param data 待写入的数据。
  */
 void TcpClientWorker::sendData(const QByteArray &data)
 {
     if (!m_socket || m_socket->state() != QAbstractSocket::ConnectedState) {
-        emit signalErrorOccurred(QStringLiteral("TCP 未连接，发送失败"));
+        emit signalErrorOccurred(QStringLiteral("TCP is not connected; send failed"));
         return;
     }
 
     const qint64 written = m_socket->write(data);
     if (written < 0) {
-        emit signalErrorOccurred(QStringLiteral("TCP 写入失败：%1").arg(m_socket->errorString()));
+        emit signalErrorOccurred(QStringLiteral("TCP write failed: %1").arg(m_socket->errorString()));
         return;
     }
 
@@ -113,8 +114,8 @@ void TcpClientWorker::sendData(const QByteArray &data)
 }
 
 /**
- * @brief  isConnected 获取 TCP 连接状态
- * @return bool true表示套接字已连接
+ * @brief 查询 TCP socket 当前是否已经连接。
+ * @return true 表示 socket 状态为 ConnectedState。
  */
 bool TcpClientWorker::isConnected() const
 {

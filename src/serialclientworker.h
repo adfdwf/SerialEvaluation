@@ -1,4 +1,4 @@
-#ifndef SERIALCLIENTWORKER_H
+﻿#ifndef SERIALCLIENTWORKER_H
 #define SERIALCLIENTWORKER_H
 
 #include "icommunicationinterface.h"
@@ -10,108 +10,86 @@
 
 BEGIN_NAMESPACE_CIQTEK
 
+/**
+ * @brief 一个串口连接所需的基础配置。
+ */
 struct SerialSettings
 {
-    /** 串口名称 */
-    QString portName;
-
-    /** 波特率 */
-    qint32 baudRate = 115200;
-
-    /** 数据位 */
-    int dataBits = QSerialPort::Data8;
-
-    /** 停止位 */
-    int stopBits = QSerialPort::OneStop;
-
-    /** 校验位 */
-    int parity = QSerialPort::NoParity;
+    QString portName;                         ///< 串口名称，例如 COM3 或 /dev/ttyUSB0。
+    qint32 baudRate = 115200;                 ///< 波特率。
+    int dataBits = QSerialPort::Data8;        ///< 数据位数量，对应 QSerialPort::DataBits。
+    int stopBits = QSerialPort::OneStop;      ///< 停止位数量，对应 QSerialPort::StopBits。
+    int parity = QSerialPort::NoParity;       ///< 校验方式，对应 QSerialPort::Parity。
 };
 
+/**
+ * @brief 在独立线程中执行一个串口的打开、收发和关闭操作。
+ *
+ * 每个 SerialPortSession 拥有一个 worker 实例，因此多个串口的 I/O 事件
+ * 互不阻塞。worker 不负责发送节奏和统计，只负责可靠传输原始字节。
+ */
 class SerialClientWorker final : public QObject, public ICommunicationInterface
 {
     Q_OBJECT
+
 public:
     /**
-     * @brief  SerialClientWorker 默认构造函数
-     * @param  settings 串口配置参数
-     * @param  parent Qt父对象
-     * @return void
+     * @brief 创建串口 worker。
+     * @param settings 串口名称、波特率和帧格式配置。
+     * @param parent Qt 父对象。
      */
     explicit SerialClientWorker(SerialSettings settings, QObject *parent = nullptr);
 
-    /**
-     * @brief  ~SerialClientWorker 默认析构函数
-     * @return void
-     */
+    /** @brief 关闭串口并释放 QSerialPort。 */
     ~SerialClientWorker() override;
 
 public Q_SLOTS:
-    /**
-     * @brief  connect 打开串口连接
-     * @return void
-     */
+    /** @brief 按配置打开串口。 */
     void connect() override;
 
-    /**
-     * @brief  disconnect 关闭串口连接
-     * @return void
-     */
+    /** @brief 关闭当前串口连接。 */
     void disconnect() override;
 
     /**
-     * @brief  sendData 发送串口数据
-     * @param  data 待发送字节数据
-     * @return void
+     * @brief 向已打开的串口写入原始字节数据。
+     * @param data 待发送的字节数组。
      */
     void sendData(const QByteArray &data) override;
 
     /**
-     * @brief  isConnected 获取串口连接状态
-     * @return bool true表示串口已打开
+     * @brief 查询串口是否已打开。
+     * @return true 表示串口处于打开状态。
      */
     bool isConnected() const override;
 
 Q_SIGNALS:
-    /**
-     * @brief  signalConnected 串口连接成功信号
-     * @return void
-     */
+    /** @brief 串口成功打开时发出。 */
     void signalConnected();
 
-    /**
-     * @brief  signalDisconnected 串口断开连接信号
-     * @return void
-     */
+    /** @brief 串口关闭或异常断开时发出。 */
     void signalDisconnected();
 
     /**
-     * @brief  signalDataReceived 串口数据接收信号
-     * @param  data 接收到的字节数据
-     * @return void
+     * @brief 收到串口字节时发出。
+     * @param data 当前 readyRead 事件读取到的字节块。
      */
     void signalDataReceived(const QByteArray &data);
 
     /**
-     * @brief  signalErrorOccurred 串口错误信号
-     * @param  message 错误文本
-     * @return void
+     * @brief 发生打开、读取或写入错误时发出。
+     * @param message 可展示给用户的错误信息。
      */
     void signalErrorOccurred(const QString &message);
 
     /**
-     * @brief  signalBytesWritten 串口写入完成信号
-     * @param  bytes 已写入字节数
-     * @return void
+     * @brief 串口底层完成写入时发出。
+     * @param bytes 本次完成写入的字节数。
      */
     void signalBytesWritten(qint64 bytes);
 
 private:
-    /** 串口配置 */
-    SerialSettings m_settings;
-
-    /** Qt串口对象 */
-    QSerialPort *m_serial = nullptr;
+    SerialSettings m_settings;        ///< 当前 worker 使用的串口配置。
+    QSerialPort *m_serial = nullptr;  ///< Qt 串口对象，归 worker 所在线程管理。
 };
 
 END_NAMESPACE_CIQTEK

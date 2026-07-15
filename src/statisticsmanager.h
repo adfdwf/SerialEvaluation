@@ -1,4 +1,4 @@
-#ifndef STATISTICSMANAGER_H
+﻿#ifndef STATISTICSMANAGER_H
 #define STATISTICSMANAGER_H
 
 #include "namespace.h"
@@ -14,190 +14,120 @@
 BEGIN_NAMESPACE_CIQTEK
 
 /**
- * @brief PacketInfo stores the metadata and payload for one sent/received packet.
- *
- * Each packet has a unique sequential ID, timestamps for send and receive,
- * a monotonic clock tick for precise RTT measurement, and a status field
- * that tracks whether it is Pending, Success, or Timeout.
+ * @brief 一条发送请求及其响应的完整生命周期记录。
  */
 struct PacketInfo
 {
-    /** Packet lifecycle status */
+    /** 当前数据包的处理状态。 */
     enum class Status {
-        Pending,    ///< Sent, waiting for response
-        Success,    ///< Response received within timeout
-        Timeout     ///< No response received before timeout
+        Pending,    ///< 已发送，等待响应。
+        Success,    ///< 已收到响应并完成耗时统计。
+        Timeout     ///< 超过超时时间仍未收到响应。
     };
 
-    /** Auto-incremented unique sequence ID */
-    quint64 id = 0;
-
-    /** Wall-clock timestamp when the packet was sent */
-    QDateTime sentAt;
-
-    /** Wall-clock timestamp when the response was received */
-    QDateTime receivedAt;
-
-    /** Monotonic clock tick (ms) when the packet was sent, used for RTT */
-    qint64 sentTickMs = 0;
-
-    /** Round-trip time in milliseconds, -1 = not measured yet */
-    qint64 elapsedMs = -1;
-
-    /** Current lifecycle status */
-    Status status = Status::Pending;
-
-    /** Transmitted payload bytes */
-    QByteArray txPayload;
-
-    /** User-selected data format used for transmission (ASCII or HEX) */
-    QString txFormat;
-
-    /** Received response payload bytes */
-    QByteArray rxPayload;
+    quint64 id = 0;                ///< 当前测试中的递增数据包编号。
+    QDateTime sentAt;              ///< 发送时的系统时间，用于日志记录。
+    QDateTime receivedAt;          ///< 收到响应时的系统时间。
+    qint64 sentTickMs = 0;         ///< 发送时的单调时钟毫秒值，用于精确计算 RTT。
+    qint64 elapsedMs = -1;         ///< 往返耗时；未完成时为 -1。
+    Status status = Status::Pending; ///< 当前生命周期状态。
+    QByteArray txPayload;          ///< 实际发送的原始字节。
+    QString txFormat;              ///< 发送格式，取值通常为 ASCII 或 HEX。
+    QByteArray rxPayload;          ///< 收到的原始响应字节。
 };
 
 /**
- * @brief StatisticsSnapshot is a read-only summary of the current test run.
- *
- * It contains aggregate counters (total sent, success, lost), performance
- * metrics (average, min, max, P50/P90/P95/P99 latency), and success rate.
+ * @brief 一次测试的实时统计快照。
  */
 struct StatisticsSnapshot
 {
-    /** Total number of packets sent */
-    quint64 totalSent = 0;
-
-    /** Number of successful (response received) packets */
-    quint64 successReceived = 0;
-
-    /** Number of lost (timed out) packets */
-    quint64 lostPackets = 0;
-
-    /** Success rate as a percentage (0.0 ~ 100.0) */
-    double successRate = 0.0;
-
-    /** Average round-trip time in milliseconds */
-    double averageElapsedMs = 0.0;
-
-    /** Minimum round-trip time in milliseconds */
-    qint64 minElapsedMs = 0;
-
-    /** Maximum round-trip time in milliseconds */
-    qint64 maxElapsedMs = 0;
-
-    /** 50th percentile (median) latency in milliseconds */
-    double p50Ms = 0.0;
-
-    /** 90th percentile latency in milliseconds */
-    double p90Ms = 0.0;
-
-    /** 95th percentile latency in milliseconds */
-    double p95Ms = 0.0;
-
-    /** 99th percentile latency in milliseconds */
-    double p99Ms = 0.0;
+    quint64 totalSent = 0;         ///< 已发送数据包总数。
+    quint64 successReceived = 0;   ///< 成功收到响应的数据包数。
+    quint64 lostPackets = 0;       ///< 超时或断开导致丢失的数据包数。
+    double successRate = 0.0;      ///< 成功率，范围为 0 到 100。
+    double averageElapsedMs = 0.0; ///< 成功数据包的平均往返耗时。
+    qint64 minElapsedMs = 0;        ///< 成功数据包的最小往返耗时。
+    qint64 maxElapsedMs = 0;        ///< 成功数据包的最大往返耗时。
+    double p50Ms = 0.0;             ///< 50 分位往返耗时。
+    double p90Ms = 0.0;             ///< 90 分位往返耗时。
+    double p95Ms = 0.0;             ///< 95 分位往返耗时。
+    double p99Ms = 0.0;             ///< 99 分位往返耗时。
 };
 
 /**
- * @brief StatisticsManager tracks all sent/received packets and computes
- *        real-time statistics for the communication benchmark.
+ * @brief 管理发送记录、响应匹配、超时状态和分位数统计。
  *
- * It uses a monotonic clock (QElapsedTimer) for precise RTT measurement
- * regardless of system wall-clock adjustments. Received packets are matched
- * to pending sends in FIFO order (serial port / raw TCP typically have no
- * embedded sequence ID).
- *
- * Thread-safety note: all methods are designed to be called from a single
- * thread (the main / UI thread). Cross-thread access is not guarded.
+ * 该类要求所有函数在 UI 线程调用。响应没有内置序列号时，使用发送顺序
+ * 与响应顺序进行 FIFO 匹配；RTT 使用单调时钟，避免系统时间调整造成误差。
  */
 class StatisticsManager final : public QObject
 {
     Q_OBJECT
+
 public:
-    /**
-     * @brief Constructs a StatisticsManager and resets all state.
-     * @param parent Qt parent object (optional)
-     */
+    /** @brief 创建统计管理器并初始化空测试状态。 */
     explicit StatisticsManager(QObject *parent = nullptr);
 
-    /**
-     * @brief Resets all counters, clears all packet records and pending queue.
-     *
-     * Call this at the start of each new test run.
-     */
+    /** @brief 清空所有记录、队列和计数器，开始新的测试周期。 */
     void reset();
 
     /**
-     * @brief Records a newly sent packet and assigns it a unique sequence ID.
-     * @param payload The byte array that was sent
-     * @return PacketInfo containing the assigned ID and send timestamp
+     * @brief 记录一条发送数据并分配递增编号。
+     * @param payload 实际发送的原始字节。
+     * @param format 用户选择的发送格式。
+     * @return 已创建的数据包记录副本。
      */
     PacketInfo recordSend(const QByteArray &payload, const QString &format = QString());
 
     /**
-     * @brief Records a received response and matches it to the earliest
-     *        pending packet (FIFO matching).
-     * @param payload The received byte array
-     * @param updatedPacket Optional output parameter receiving a copy of
-     *        the matched PacketInfo after update
-     * @return true if a pending packet was matched, false otherwise
+     * @brief 将接收数据匹配到最早的 Pending 数据包。
+     * @param payload 收到的原始响应字节。
+     * @param updatedPacket 可选输出参数，返回更新后的数据包记录。
+     * @return 成功匹配返回 true，否则返回 false。
      */
     bool recordReceive(const QByteArray &payload, PacketInfo *updatedPacket = nullptr);
 
     /**
-     * @brief Marks all pending packets whose elapsed time exceeds timeoutMs
-     *        as Timeout.
-     * @param timeoutMs Timeout threshold in milliseconds
-     * @return Vector of PacketInfo entries that were newly marked as Timeout
+     * @brief 将超过超时阈值的 Pending 数据包标记为 Timeout。
+     * @param timeoutMs 超时阈值，单位为毫秒。
+     * @return 本次新标记为超时的数据包列表。
      */
     QVector<PacketInfo> markTimeouts(qint64 timeoutMs);
 
     /**
-     * @brief Marks every remaining pending packet as Timeout (lost).
-     *
-     * Typically called when the test is stopped manually.
-     * @return Vector of all packets that were marked as Timeout
+     * @brief 将所有剩余 Pending 数据包标记为丢失。
+     * @return 本次被标记的数据包列表。
      */
     QVector<PacketInfo> markAllPendingLost();
 
     /**
-     * @brief Checks whether any packets are still in Pending status.
-     * @return true if at least one packet is still waiting for a response
+     * @brief 判断是否仍有等待响应的数据包。
+     * @return 存在 Pending 数据包时返回 true。
      */
     bool hasPendingPackets() const;
 
     /**
-     * @brief Computes and returns a StatisticsSnapshot with all aggregate
-     *        counters, percentiles, and success rate.
-     *
-     * This is a const method; it does not modify internal state.
-     * P50/P90/P95/P99 are calculated by sorting the successful RTT values
-     * and applying linear interpolation.
-     * @return StatisticsSnapshot with current test-run statistics
+     * @brief 根据当前记录计算总数、成功率、平均值和 P50/P90/P95/P99。
+     * @return 当前测试统计快照。
      */
     StatisticsSnapshot snapshot() const;
 
     /**
-     * @brief Returns a const reference to the full list of all packet records.
-     * @return const QVector<PacketInfo>& packet list (read-only)
+     * @brief 返回全部数据包记录的只读引用。
+     * @return 当前测试的完整数据包列表。
      */
     const QVector<PacketInfo> &packets() const;
 
 private:
-    /**
-     * @brief Rebuilds the pending-ID queue from scratch by scanning m_packets.
-     *
-     * Called internally after timeouts are marked.
-     */
+    /** @brief 根据数据包状态重新构建待响应编号队列。 */
     void rebuildPendingQueue();
 
 private:
-    QElapsedTimer m_timer;                   ///< Monotonic clock for RTT measurement
-    quint64 m_nextId = 1;                    ///< Next auto-increment packet ID
-    QVector<PacketInfo> m_packets;            ///< All packet records for the current run
-    QQueue<quint64> m_pendingIds;             ///< FIFO queue of packet IDs awaiting response
-    QHash<quint64, int> m_indexById;          ///< Packet-ID-to-index lookup for O(1) access
+    QElapsedTimer m_timer;              ///< 测试周期使用的单调时钟。
+    quint64 m_nextId = 1;               ///< 下一条发送记录要使用的编号。
+    QVector<PacketInfo> m_packets;      ///< 当前测试周期的全部数据包记录。
+    QQueue<quint64> m_pendingIds;       ///< 按发送顺序排列的 Pending 编号队列。
+    QHash<quint64, int> m_indexById;    ///< 数据包编号到 m_packets 下标的快速索引。
 };
 
 END_NAMESPACE_CIQTEK

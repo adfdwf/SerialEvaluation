@@ -1,4 +1,4 @@
-#include "mainwindow.h"
+﻿#include "mainwindow.h"
 #include "serialclientworker.h"
 #include "tcpclientworker.h"
 #include "ui_mainwindow.h"
@@ -29,6 +29,15 @@
 
 BEGIN_NAMESPACE_CIQTEK
 
+/**
+ * @file mainwindow.cpp
+ * @brief 实现 TCP 多端口和串口多端口性能测试主界面。
+ *
+ * 主线程负责 UI、发送调度、统计和日志；每个网络/串口会话的 worker 在
+ * 独立线程中执行 I/O，避免某个端口阻塞其他端口。
+ */
+
+/** 创建主窗口并初始化所有动态界面和定时器。 */
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow)
 {
@@ -41,6 +50,7 @@ MainWindow::MainWindow(QWidget *parent)
     scheduleStatsRefresh();
 }
 
+/** 停止测试、关闭所有 worker、删除会话对象并释放 UI。 */
 MainWindow::~MainWindow()
 {
     stopTcpTest(true);
@@ -56,6 +66,7 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
+/** 初始化公共控件范围、定时器、信号连接和 TCP/串口动态区域。 */
 void MainWindow::setupUiLogic()
 {
     m_sendTimer = new QTimer(this);
@@ -117,6 +128,7 @@ void MainWindow::setupUiLogic()
     QObject::connect(m_timeoutTimer, &QTimer::timeout, this, &MainWindow::slotCheckTimeouts);
 }
 
+/** 配置旧版单串口命令表的列、选择方式并创建第一条命令。 */
 void MainWindow::setupCommandTable()
 {
     QStringList headers;
@@ -136,6 +148,7 @@ void MainWindow::setupCommandTable()
     slotAddCommandRow();
 }
 
+/** 向旧版单串口命令表新增一行可编辑命令。 */
 void MainWindow::slotAddCommandRow()
 {
     const int row = ui->tableCommands->rowCount();
@@ -171,6 +184,7 @@ void MainWindow::slotAddCommandRow()
     ui->tableCommands->setCellWidget(row, 2, modeWidget);
 }
 
+/** 删除旧版单串口命令表中的当前命令并重新编号。 */
 void MainWindow::slotRemoveCommandRow()
 {
     const int row = ui->tableCommands->currentRow();
@@ -192,6 +206,7 @@ void MainWindow::slotRemoveCommandRow()
     }
 }
 
+/** 根据旧命令输入和 ASCII/HEX 选择实时更新输入框校验样式。 */
 void MainWindow::slotCommandTextChanged()
 {
     QLineEdit *edit = qobject_cast<QLineEdit *>(sender());
@@ -229,6 +244,7 @@ void MainWindow::slotCommandTextChanged()
     }
 }
 
+/** 响应旧命令表中的 HEX 单选按钮变化。 */
 void MainWindow::slotHexModeToggled()
 {
     QRadioButton *rb = qobject_cast<QRadioButton *>(sender());
@@ -248,6 +264,7 @@ void MainWindow::slotHexModeToggled()
     }
 }
 
+/** 校验 HEX 文本是否由偶数个合法十六进制字符组成。 */
 bool MainWindow::validateHexSyntax(const QString &text)
 {
     if (text.trimmed().isEmpty()) {
@@ -270,6 +287,7 @@ bool MainWindow::validateHexSyntax(const QString &text)
     return true;
 }
 
+/** 校验 A0 81 协议帧的长度字段和累加校验和。 */
 bool MainWindow::validateHexPayload(const QString &text)
 {
     if (!validateHexSyntax(text)) {
@@ -302,6 +320,7 @@ bool MainWindow::validateHexPayload(const QString &text)
     return checksum == static_cast<quint8>(payload.back());
 }
 
+/** 判断单个字符是否属于 0-9、a-f 或 A-F。 */
 bool MainWindow::isValidHexChar(QChar c)
 {
     return (c >= QLatin1Char('0') && c <= QLatin1Char('9')) ||
@@ -309,6 +328,7 @@ bool MainWindow::isValidHexChar(QChar c)
            (c >= QLatin1Char('A') && c <= QLatin1Char('F'));
 }
 
+/** 从旧版单串口命令表收集非空命令。 */
 QList<CommandItem> MainWindow::collectCommands()
 {
     QList<CommandItem> commands;
@@ -341,6 +361,7 @@ QList<CommandItem> MainWindow::collectCommands()
     return commands;
 }
 
+/** 从指定动态命令表收集非空命令并判断其 HEX 格式。 */
 QList<CommandItem> MainWindow::collectCommands(QTableWidget *table) const
 {
     QList<CommandItem> commands;
@@ -369,6 +390,7 @@ QList<CommandItem> MainWindow::collectCommands(QTableWidget *table) const
     return commands;
 }
 
+/** 确认命令列表非空且每一条命令都通过校验。 */
 bool MainWindow::validateCommands(const QList<CommandItem> &commands)
 {
     if (commands.isEmpty()) {
@@ -384,12 +406,14 @@ bool MainWindow::validateCommands(const QList<CommandItem> &commands)
     return true;
 }
 
+/** 设置窗口标题和基础窗口尺寸。 */
 void MainWindow::applyIndustrialTheme()
 {
     setWindowTitle(QStringLiteral("CommBench Pro - Industrial Communication Benchmark"));
     resize(1280, 780);
 }
 
+/** 切换 TCP/串口界面，停止旧模式会话并显示对应动态区域。 */
 void MainWindow::slotModeChanged(int index)
 {
     const bool serialMode = index == 1;
@@ -424,6 +448,7 @@ void MainWindow::slotModeChanged(int index)
     }
 }
 
+/** 创建 TCP 端口工具栏、状态表和命令标签页容器。 */
 void MainWindow::setupTcpPortUi()
 {
     auto *mainLayout = qobject_cast<QVBoxLayout *>(ui->centralwidget->layout());
@@ -463,6 +488,7 @@ void MainWindow::setupTcpPortUi()
     portBox->setVisible(false);
 }
 
+/** 创建一个 TCP 端口会话、命令表和端口级 Send All 按钮。 */
 void MainWindow::addTcpPort(quint16 port)
 {
     if (port == 0 || m_tcpSessions.contains(port)) {
@@ -513,6 +539,7 @@ void MainWindow::addTcpPort(quint16 port)
     updateTcpConnectionState();
 }
 
+/** 关闭并删除指定 TCP 会话，同时移除其表格行和标签页。 */
 void MainWindow::removeTcpPort(quint16 port)
 {
     TcpPortSession *session = m_tcpSessions.take(port);
@@ -545,6 +572,7 @@ void MainWindow::removeTcpPort(quint16 port)
     updateTcpConnectionState();
 }
 
+/** 弹出端口号输入框并添加 TCP 会话。 */
 void MainWindow::slotAddTcpPort()
 {
     bool ok = false;
@@ -558,6 +586,7 @@ void MainWindow::slotAddTcpPort()
     }
 }
 
+/** 删除 TCP 端口表中当前选中的端口。 */
 void MainWindow::slotRemoveTcpPort()
 {
     const int row = m_tcpPortTable->currentRow();
@@ -567,6 +596,7 @@ void MainWindow::slotRemoveTcpPort()
     removeTcpPort(static_cast<quint16>(m_tcpPortTable->item(row, 0)->text().toUShort()));
 }
 
+/** 为指定 TCP 会话新增一条 ASCII/HEX 命令。 */
 void MainWindow::addTcpCommand(TcpPortSession *session)
 {
     if (!session || !session->commandTable) {
@@ -619,6 +649,7 @@ void MainWindow::addTcpCommand(TcpPortSession *session)
     QObject::connect(hex, &QRadioButton::toggled, this, refreshValidation);
 }
 
+/** 删除指定 TCP 会话当前选中的命令。 */
 void MainWindow::removeTcpCommand(TcpPortSession *session)
 {
     if (!session || !session->commandTable || session->commandTable->rowCount() <= 1) {
@@ -634,6 +665,7 @@ void MainWindow::removeTcpCommand(TcpPortSession *session)
     }
 }
 
+/** 刷新旧版串口下拉框并同步动态串口候选项。 */
 void MainWindow::slotRefreshSerialPorts()
 {
     const QString previous = ui->comboBoxSerialPort->currentText();
@@ -651,6 +683,7 @@ void MainWindow::slotRefreshSerialPorts()
     refreshSerialPortChoices();
 }
 
+/** 创建串口工具栏、状态表和每串口命令标签页容器。 */
 void MainWindow::setupSerialPortUi()
 {
     auto *mainLayout = qobject_cast<QVBoxLayout *>(ui->centralwidget->layout());
@@ -695,6 +728,7 @@ void MainWindow::setupSerialPortUi()
     m_serialPortBox->setVisible(false);
 }
 
+/** 创建一个串口会话及其基础参数、命令和统计控件。 */
 void MainWindow::addSerialPort(const QString &portName)
 {
     const QString name = portName.trimmed();
@@ -793,6 +827,7 @@ void MainWindow::addSerialPort(const QString &portName)
     updateSerialConnectionState();
 }
 
+/** 安全关闭指定串口并删除其动态页面和状态行。 */
 void MainWindow::removeSerialPort(const QString &portName)
 {
     SerialPortSession *session = m_serialSessions.take(portName);
@@ -818,6 +853,7 @@ void MainWindow::removeSerialPort(const QString &portName)
     updateSerialConnectionState();
 }
 
+/** 弹出串口名称输入框并创建新的串口会话。 */
 void MainWindow::slotAddSerialPort()
 {
     QStringList names;
@@ -841,6 +877,7 @@ void MainWindow::slotAddSerialPort()
     addSerialPort(name);
 }
 
+/** 删除串口状态表中当前选中的串口。 */
 void MainWindow::slotRemoveSerialPort()
 {
     const int row = m_serialPortTable ? m_serialPortTable->currentRow() : -1;
@@ -850,6 +887,7 @@ void MainWindow::slotRemoveSerialPort()
     removeSerialPort(m_serialPortTable->item(row, 0)->text());
 }
 
+/** 对所有已连接串口分别启动一次 Send All。 */
 void MainWindow::slotSendAllSerialPorts()
 {
     for (SerialPortSession *session : m_serialSessions) {
@@ -857,6 +895,7 @@ void MainWindow::slotSendAllSerialPorts()
     }
 }
 
+/** 根据系统热插拔结果刷新每个串口会话的候选名称。 */
 void MainWindow::refreshSerialPortChoices()
 {
     QStringList names;
@@ -874,6 +913,7 @@ void MainWindow::refreshSerialPortChoices()
     }
 }
 
+/** 将串口配置控件转换为 worker 使用的 SerialSettings。 */
 SerialSettings MainWindow::serialSettings(const SerialPortSession *session) const
 {
     SerialSettings settings;
@@ -889,6 +929,7 @@ SerialSettings MainWindow::serialSettings(const SerialPortSession *session) cons
     return settings;
 }
 
+/** 为串口会话新增一行带实时 HEX 校验的命令。 */
 void MainWindow::addSerialCommand(SerialPortSession *session)
 {
     if (!session || !session->commandTable) return;
@@ -940,6 +981,7 @@ void MainWindow::addSerialCommand(SerialPortSession *session)
     QObject::connect(hex, &QRadioButton::toggled, this, refreshValidation);
 }
 
+/** 删除串口会话当前选中的命令并重新编号。 */
 void MainWindow::removeSerialCommand(SerialPortSession *session)
 {
     if (!session || !session->commandTable || session->commandTable->rowCount() <= 1) return;
@@ -951,6 +993,7 @@ void MainWindow::removeSerialCommand(SerialPortSession *session)
     }
 }
 
+/** 收集串口会话中非空的独立命令列表。 */
 QList<CommandItem> MainWindow::collectSerialCommands(const SerialPortSession *session) const
 {
     QList<CommandItem> commands;
@@ -976,11 +1019,13 @@ QList<CommandItem> MainWindow::collectSerialCommands(const SerialPortSession *se
     return commands;
 }
 
+/** 判断当前模式是否为 TCP Network。 */
 bool MainWindow::isTcpMode() const
 {
     return ui->comboBoxMode->currentIndex() == 0;
 }
 
+/** 为全部 TCP 会话创建 worker 线程并发起连接。 */
 void MainWindow::connectTcpPorts()
 {
     if (m_tcpSessions.isEmpty()) {
@@ -1025,9 +1070,9 @@ void MainWindow::connectTcpPorts()
             if (m_tcpSessions.value(session->port) != session) return;
             PacketInfo packet;
             if (session->statistics.recordReceive(data, &packet)) {
-                appendLog(LogLevel::Rx, QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat)), packet.elapsedMs);
+                appendLog(LogLevel::Rx, QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
             } else {
-                appendLog(LogLevel::Rx, QStringLiteral("[Port %1] Unmatched response %2").arg(session->port).arg(payloadToDisplay(data)));
+                appendLog(LogLevel::Rx, QStringLiteral("[Port %1] Unmatched response %2").arg(session->port).arg(payloadToDisplay(data, QString(), false)));
             }
             scheduleStatsRefresh();
         });
@@ -1045,6 +1090,7 @@ void MainWindow::connectTcpPorts()
     appendLog(LogLevel::Info, QStringLiteral("Connecting to %1 TCP ports at %2").arg(m_tcpSessions.size()).arg(address.toString()));
 }
 
+/** 关闭全部 TCP worker 并更新每个端口的状态。 */
 void MainWindow::disconnectTcpPorts()
 {
     destroyTcpWorkers();
@@ -1057,6 +1103,7 @@ void MainWindow::disconnectTcpPorts()
     appendLog(LogLevel::Info, QStringLiteral("All TCP connections closed"));
 }
 
+/** 停止并释放全部 TCP 会话的定时器、线程和 worker。 */
 void MainWindow::destroyTcpWorkers()
 {
     for (TcpPortSession *session : m_tcpSessions) {
@@ -1086,6 +1133,7 @@ void MainWindow::destroyTcpWorkers()
     }
 }
 
+/** 更新 TCP 状态表中指定端口的状态文本。 */
 void MainWindow::updateTcpPortRow(TcpPortSession *session, const QString &state)
 {
     if (!session || !m_tcpPortTable) return;
@@ -1097,6 +1145,7 @@ void MainWindow::updateTcpPortRow(TcpPortSession *session, const QString &state)
     }
 }
 
+/** 汇总 TCP 连接数并刷新顶部状态 LED 和按钮。 */
 void MainWindow::updateTcpConnectionState()
 {
     int connected = 0;
@@ -1122,6 +1171,7 @@ void MainWindow::updateTcpConnectionState()
     ui->pushButtonDisconnect->setEnabled(connected > 0 || connecting > 0);
 }
 
+/** 创建串口 worker 线程并并发打开全部串口。 */
 void MainWindow::connectSerialPorts()
 {
     if (m_serialSessions.isEmpty()) {
@@ -1179,9 +1229,9 @@ void MainWindow::connectSerialPorts()
             if (m_serialSessions.value(session->portName) != session) return;
             PacketInfo packet;
             if (session->statistics.recordReceive(data, &packet)) {
-                appendLog(LogLevel::Rx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat)), packet.elapsedMs);
+                appendLog(LogLevel::Rx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
             } else {
-                appendLog(LogLevel::Rx, QStringLiteral("[%1] Unmatched response %2").arg(session->portName).arg(payloadToDisplay(data)));
+                appendLog(LogLevel::Rx, QStringLiteral("[%1] Unmatched response %2").arg(session->portName).arg(payloadToDisplay(data, QString(), false)));
             }
             updateSerialSessionStats(session);
             scheduleStatsRefresh();
@@ -1204,6 +1254,7 @@ void MainWindow::connectSerialPorts()
     updateSerialConnectionState();
 }
 
+/** 关闭全部串口连接并恢复可编辑状态。 */
 void MainWindow::disconnectSerialPorts()
 {
     destroySerialWorkers();
@@ -1217,6 +1268,7 @@ void MainWindow::disconnectSerialPorts()
     appendLog(LogLevel::Info, QStringLiteral("All serial connections closed"));
 }
 
+/** 关闭一个串口 worker 的设备、线程和发送定时器。 */
 void MainWindow::destroySerialWorker(SerialPortSession *session)
 {
     if (!session) return;
@@ -1244,11 +1296,13 @@ void MainWindow::destroySerialWorker(SerialPortSession *session)
     session->connecting = false;
 }
 
+/** 遍历并关闭所有串口 worker。 */
 void MainWindow::destroySerialWorkers()
 {
     for (SerialPortSession *session : m_serialSessions) destroySerialWorker(session);
 }
 
+/** 更新串口状态表中指定串口的状态文本。 */
 void MainWindow::updateSerialPortRow(SerialPortSession *session, const QString &state)
 {
     if (!session || !m_serialPortTable) return;
@@ -1260,6 +1314,7 @@ void MainWindow::updateSerialPortRow(SerialPortSession *session, const QString &
     }
 }
 
+/** 汇总串口连接数并刷新顶部状态 LED 和按钮。 */
 void MainWindow::updateSerialConnectionState()
 {
     int connected = 0;
@@ -1287,6 +1342,7 @@ void MainWindow::updateSerialConnectionState()
     ui->pushButtonDisconnect->setEnabled(connected > 0 || connecting > 0);
 }
 
+/** 将指定串口的全部命令加入单次发送队列。 */
 void MainWindow::sendAllSerialPort(SerialPortSession *session)
 {
     if (!session || session->testRunning || session->oneShotRunning) return;
@@ -1305,6 +1361,7 @@ void MainWindow::sendAllSerialPort(SerialPortSession *session)
     sendNextOneShotSerialPacket(session);
 }
 
+/** 发送串口单次队列中的下一条命令，并安排后续命令。 */
 void MainWindow::sendNextOneShotSerialPacket(SerialPortSession *session)
 {
     if (!session || !session->oneShotRunning || !session->worker || !session->connected) return;
@@ -1333,6 +1390,7 @@ void MainWindow::sendNextOneShotSerialPacket(SerialPortSession *session)
     }
 }
 
+/** 使用绝对目标时间安排串口单次队列的下一次发送。 */
 void MainWindow::scheduleNextOneShotSerialPacket(SerialPortSession *session, int intervalMs)
 {
     if (!session || !session->oneShotRunning) return;
@@ -1352,6 +1410,7 @@ void MainWindow::scheduleNextOneShotSerialPacket(SerialPortSession *session, int
     session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextOneShotDeadlineMs - session->sendClock.elapsed())));
 }
 
+/** 启动全部已连接串口的连续性能测试。 */
 void MainWindow::startSerialTest()
 {
     if (m_serialSessions.isEmpty()) {
@@ -1380,6 +1439,7 @@ void MainWindow::startSerialTest()
         return;
     }
     ui->textEditLog->clear();
+    m_logHistory.clear();
     m_testRunning = true;
     m_finishingAfterLimit = false;
     ui->pushButtonStart->setEnabled(false);
@@ -1392,6 +1452,7 @@ void MainWindow::startSerialTest()
     for (SerialPortSession *session : m_serialSessions) if (session->testRunning) sendNextSerialPacket(session);
 }
 
+/** 停止串口连续测试，标记未完成请求并保存报告。 */
 void MainWindow::stopSerialTest(bool manualStop)
 {
     bool anyRunning = m_testRunning;
@@ -1418,6 +1479,7 @@ void MainWindow::stopSerialTest(bool manualStop)
     updateSerialConnectionState();
 }
 
+/** 发送指定串口连续测试的下一条命令。 */
 void MainWindow::sendNextSerialPacket(SerialPortSession *session)
 {
     if (!session || !session->testRunning || !session->worker || !session->connected) return;
@@ -1452,6 +1514,7 @@ void MainWindow::sendNextSerialPacket(SerialPortSession *session)
     scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
 }
 
+/** 使用绝对目标时间安排串口连续测试的下一次发送。 */
 void MainWindow::scheduleNextSerialPacket(SerialPortSession *session, int intervalMs)
 {
     if (!session || !session->testRunning || session->finishingAfterLimit) return;
@@ -1471,6 +1534,7 @@ void MainWindow::scheduleNextSerialPacket(SerialPortSession *session, int interv
     session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextSendDeadlineMs - session->sendClock.elapsed())));
 }
 
+/** 扫描串口会话超时状态，并在全部会话完成后停止测试。 */
 void MainWindow::checkSerialTimeouts()
 {
     if (!m_testRunning) return;
@@ -1485,6 +1549,7 @@ void MainWindow::checkSerialTimeouts()
     scheduleStatsRefresh();
 }
 
+/** 根据端口表当前选择，对单个 TCP 端口执行 Send All。 */
 void MainWindow::slotSendSelectedTcpPort()
 {
     if (!m_tcpPortTable) return;
@@ -1494,6 +1559,7 @@ void MainWindow::slotSendSelectedTcpPort()
     }
 }
 
+/** 对全部 TCP 会话并发执行单次 Send All。 */
 void MainWindow::slotSendAllTcpPorts()
 {
     for (TcpPortSession *session : m_tcpSessions) {
@@ -1501,6 +1567,7 @@ void MainWindow::slotSendAllTcpPorts()
     }
 }
 
+/** 将指定 TCP 会话的命令加入单次发送队列。 */
 void MainWindow::sendAllTcpPort(TcpPortSession *session)
 {
     if (!session || session->testRunning) {
@@ -1522,6 +1589,7 @@ void MainWindow::sendAllTcpPort(TcpPortSession *session)
     sendNextOneShotTcpPacket(session);
 }
 
+/** 发送 TCP 单次队列中的下一条命令。 */
 void MainWindow::sendNextOneShotTcpPacket(TcpPortSession *session)
 {
     if (!session || !session->oneShotRunning || !session->worker || !session->connected) {
@@ -1552,6 +1620,7 @@ void MainWindow::sendNextOneShotTcpPacket(TcpPortSession *session)
     }
 }
 
+/** 使用绝对目标时间安排 TCP 单次队列的下一次发送。 */
 void MainWindow::scheduleNextOneShotTcpPacket(TcpPortSession *session, int intervalMs)
 {
     if (!session || !session->oneShotRunning) return;
@@ -1571,6 +1640,7 @@ void MainWindow::scheduleNextOneShotTcpPacket(TcpPortSession *session, int inter
     session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextOneShotDeadlineMs - session->sendClock.elapsed())));
 }
 
+/** 启动所有 TCP 端口的连续性能测试。 */
 void MainWindow::startTcpTest()
 {
     if (m_tcpSessions.isEmpty() || !m_connected) {
@@ -1582,6 +1652,7 @@ void MainWindow::startTcpTest()
     }
 
     ui->textEditLog->clear();
+    m_logHistory.clear();
     for (TcpPortSession *session : m_tcpSessions) {
         const QList<CommandItem> commands = collectCommands(session->commandTable);
         session->statistics.reset();
@@ -1612,6 +1683,7 @@ void MainWindow::startTcpTest()
     for (TcpPortSession *session : m_tcpSessions) sendNextTcpPacket(session);
 }
 
+/** 停止 TCP 连续测试、处理未完成请求并保存报告。 */
 void MainWindow::stopTcpTest(bool manualStop)
 {
     bool anyRunning = m_testRunning;
@@ -1641,6 +1713,7 @@ void MainWindow::stopTcpTest(bool manualStop)
     updateTcpConnectionState();
 }
 
+/** 发送指定 TCP 会话连续测试的下一条命令。 */
 void MainWindow::sendNextTcpPacket(TcpPortSession *session)
 {
     if (!session || !session->testRunning || !session->worker) return;
@@ -1662,6 +1735,7 @@ void MainWindow::sendNextTcpPacket(TcpPortSession *session)
         checkTcpTimeouts();
         return;
     }
+
     const CommandItem &item = commands.at(session->currentCommandIndex);
     QByteArray payload = item.hexMode
         ? QByteArray::fromHex(item.text.simplified().remove(QRegularExpression(QStringLiteral("\\s+"))).toLatin1())
@@ -1678,6 +1752,7 @@ void MainWindow::sendNextTcpPacket(TcpPortSession *session)
     scheduleNextTcpPacket(session, intervalMs);
 }
 
+/** 使用绝对目标时间安排 TCP 连续测试的下一次发送。 */
 void MainWindow::scheduleNextTcpPacket(TcpPortSession *session, int intervalMs)
 {
     if (!session || !session->testRunning || session->finishingAfterLimit) return;
@@ -1697,6 +1772,7 @@ void MainWindow::scheduleNextTcpPacket(TcpPortSession *session, int intervalMs)
     session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextSendDeadlineMs - session->sendClock.elapsed())));
 }
 
+/** 扫描 TCP 会话超时状态，并在全部会话完成后停止测试。 */
 void MainWindow::checkTcpTimeouts()
 {
     if (!m_testRunning) return;
@@ -1710,6 +1786,7 @@ void MainWindow::checkTcpTimeouts()
     scheduleStatsRefresh();
 }
 
+/** 响应顶部 Connect All 按钮并分派到当前模式。 */
 void MainWindow::slotConnectClicked()
 {
     if (isTcpMode()) {
@@ -1719,6 +1796,7 @@ void MainWindow::slotConnectClicked()
     connectSerialPorts();
 }
 
+/** 响应顶部 Disconnect All 按钮并关闭当前模式连接。 */
 void MainWindow::slotDisconnectClicked()
 {
     if (isTcpMode()) {
@@ -1730,6 +1808,7 @@ void MainWindow::slotDisconnectClicked()
     disconnectSerialPorts();
 }
 
+/** 响应 Start 按钮并启动当前模式的连续测试。 */
 void MainWindow::slotStartClicked()
 {
     if (isTcpMode()) {
@@ -1739,6 +1818,7 @@ void MainWindow::slotStartClicked()
     startSerialTest();
 }
 
+/** 响应 Stop 按钮并停止当前模式的连续测试。 */
 void MainWindow::slotStopClicked()
 {
     if (isTcpMode()) {
@@ -1748,6 +1828,7 @@ void MainWindow::slotStopClicked()
     stopSerialTest(true);
 }
 
+/** 兼容旧单 worker 的下一条命令发送槽。 */
 void MainWindow::slotSendNextPacket()
 {
     if (!m_testRunning || !m_workerObject) {
@@ -1828,6 +1909,7 @@ void MainWindow::slotSendNextPacket()
     scheduleNextSend(intervalMs);
 }
 
+/** 使用绝对目标时间安排旧单 worker 的下一次发送。 */
 void MainWindow::scheduleNextSend(int intervalMs)
 {
     if (!m_testRunning || m_finishingAfterLimit) {
@@ -1851,6 +1933,7 @@ void MainWindow::scheduleNextSend(int intervalMs)
     m_sendTimer->start(static_cast<int>(remainingMs));
 }
 
+/** 周期检查当前模式的超时状态。 */
 void MainWindow::slotCheckTimeouts()
 {
     if (isTcpMode()) {
@@ -1860,6 +1943,7 @@ void MainWindow::slotCheckTimeouts()
     checkSerialTimeouts();
 }
 
+/** 旧单 worker 连接成功回调。 */
 void MainWindow::slotWorkerConnected()
 {
     m_connected = true;
@@ -1867,6 +1951,7 @@ void MainWindow::slotWorkerConnected()
     appendLog(LogLevel::Info, QStringLiteral("Connected"));
 }
 
+/** 旧单 worker 断开回调，并在测试中停止发送。 */
 void MainWindow::slotWorkerDisconnected()
 {
     m_connected = false;
@@ -1877,23 +1962,26 @@ void MainWindow::slotWorkerDisconnected()
     appendLog(LogLevel::Info, QStringLiteral("Remote closed connection"));
 }
 
+/** 旧单 worker 数据接收回调，完成 FIFO 响应匹配和日志记录。 */
 void MainWindow::slotWorkerDataReceived(const QByteArray &data)
 {
     PacketInfo packet;
     if (m_statistics.recordReceive(data, &packet)) {
-        appendLog(LogLevel::Rx, QStringLiteral("#%1 %2").arg(packet.id).arg(payloadToDisplay(data, packet.txFormat)), packet.elapsedMs);
+        appendLog(LogLevel::Rx, QStringLiteral("#%1 %2").arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
     } else {
-        appendLog(LogLevel::Rx, QStringLiteral("Unmatched response %1").arg(payloadToDisplay(data)));
+        appendLog(LogLevel::Rx, QStringLiteral("Unmatched response %1").arg(payloadToDisplay(data, QString(), false)));
     }
     scheduleStatsRefresh();
     checkFinishAfterLimit();
 }
 
+/** 旧单 worker 错误回调，将错误写入 UI 日志。 */
 void MainWindow::slotWorkerError(const QString &message)
 {
     appendLog(LogLevel::Error, message);
 }
 
+/** 设置旧单 worker 模式下的顶部连接状态。 */
 void MainWindow::setConnectionState(ConnectionState state)
 {
     QString text;
@@ -1931,6 +2019,7 @@ void MainWindow::setConnectionState(ConnectionState state)
     }
 }
 
+/** 根据当前模式创建兼容旧界面的 TCP 或串口 worker。 */
 void MainWindow::createWorker()
 {
     m_commThread = new QThread(this);
@@ -1973,6 +2062,7 @@ void MainWindow::createWorker()
     m_commThread->start();
 }
 
+/** 停止旧单 worker 线程并释放其通信对象。 */
 void MainWindow::destroyWorker()
 {
     if (!m_commThread) {
@@ -1994,6 +2084,7 @@ void MainWindow::destroyWorker()
     m_connected = false;
 }
 
+/** 刷新顶部全局统计，并刷新每个动态端口的统计卡片。 */
 void MainWindow::updateStatsView()
 {
     if (isTcpMode()) {
@@ -2119,6 +2210,7 @@ void MainWindow::updateStatsView()
     setLabel(QStringLiteral("labelP99Value"), QStringLiteral("%1 ms").arg(snap.p99Ms, 0, 'f', 3));
 }
 
+/** 将指定串口的独立统计快照写入其标签页。 */
 void MainWindow::updateSerialSessionStats(SerialPortSession *session)
 {
     if (!session || !session->commandPage) return;
@@ -2135,6 +2227,7 @@ void MainWindow::updateSerialSessionStats(SerialPortSession *session)
     setValue(QStringLiteral("serialP99Value"), QStringLiteral("%1 ms").arg(snap.p99Ms, 0, 'f', 3));
 }
 
+/** 向旧版全局统计网格追加 P50/P90/P95/P99 行。 */
 void MainWindow::setupStatsLabels()
 {
     // 在统计区已有的 Min 行下方插入百分位指标行
@@ -2155,12 +2248,14 @@ void MainWindow::setupStatsLabels()
     addRow(QStringLiteral("P99"), QStringLiteral("labelP99Value"));
 }
 
+/** 启动统计定时器，避免每个响应都立即重绘整个 UI。 */
 void MainWindow::scheduleStatsRefresh()
 {
     if (!m_statsTimer->isActive()) {
         m_statsTimer->start();
     }
 }
+/** 将结构化日志追加到屏幕，并限制超大 payload 的显示长度。 */
 void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs)
 {
     QString tag;
@@ -2190,6 +2285,9 @@ void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs
         elapsed = QStringLiteral(" (%1 ms)").arg(elapsedMs);
     }
 
+    // 先保存未截断的纯文本事件，报告文件因此可以还原日志区域的完整内容。
+    m_logHistory.append(QStringLiteral("[%1] %2%3 %4").arg(tag, timestamp, elapsed, text));
+
     // Never render megabytes of command data in QTextEdit: doing so blocks the
     // GUI event loop and directly distorts the send interval. Full payloads are
     // still written to the report file; the on-screen log is a bounded preview.
@@ -2212,6 +2310,7 @@ void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs
     }
 }
 
+/** 停止旧单 worker 测试、标记未完成包并保存报告。 */
 void MainWindow::stopTest(bool manualStop)
 {
     if (!m_testRunning) {
@@ -2240,6 +2339,7 @@ void MainWindow::stopTest(bool manualStop)
     ui->comboBoxMode->setEnabled(true);
 }
 
+/** 根据当前模式写出测试报告。 */
 void MainWindow::finalizeTestReport()
 {
     if (isTcpMode()) {
@@ -2333,10 +2433,12 @@ void MainWindow::finalizeTestReport()
                    .arg(txData);
     }
 
-    file.close();
     appendLog(LogLevel::Info, QStringLiteral("Test report saved: %1").arg(filePath));
+    writeEventLog(out);
+    file.close();
 }
 
+/** 写出按串口分区的配置、统计、发送和响应报告。 */
 void MainWindow::finalizeSerialReport()
 {
     const QString fileName = QStringLiteral("CommReport_Serial_%1.txt").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
@@ -2383,10 +2485,12 @@ void MainWindow::finalizeSerialReport()
         }
         out << QLatin1Char('\n');
     }
-    file.close();
     appendLog(LogLevel::Info, QStringLiteral("Multi-serial report saved: %1").arg(file.fileName()));
+    writeEventLog(out);
+    file.close();
 }
 
+/** 写出按 TCP 端口分区的配置、统计和发送报告。 */
 void MainWindow::finalizeTcpReport()
 {
     const QString fileName = QStringLiteral("CommReport_%1.txt")
@@ -2454,10 +2558,21 @@ void MainWindow::finalizeTcpReport()
         }
         out << QLatin1Char('\n');
     }
-    file.close();
     appendLog(LogLevel::Info, QStringLiteral("Multi-port test report saved: %1").arg(file.fileName()));
+    writeEventLog(out);
+    file.close();
 }
 
+/** 将日志区域的每条完整事件按时间顺序写入报告。 */
+void MainWindow::writeEventLog(QTextStream &out) const
+{
+    out << QStringLiteral("\n--- Complete UI Event Log ---\n");
+    for (const QString &line : m_logHistory) {
+        out << line << QLatin1Char('\n');
+    }
+}
+
+/** 兼容旧单 worker 的发送上限完成检查。 */
 void MainWindow::checkFinishAfterLimit()
 {
     if (m_testRunning && m_finishingAfterLimit && !m_statistics.hasPendingPackets()) {
@@ -2465,11 +2580,13 @@ void MainWindow::checkFinishAfterLimit()
     }
 }
 
+/** 返回当前工作模式的中文/英文混合显示名称。 */
 QString MainWindow::currentModeDescription() const
 {
     return ui->comboBoxMode->currentIndex() == 0 ? QStringLiteral("TCP Network") : QStringLiteral("Serial Port");
 }
 
+/** 返回当前模式的目标地址和通信配置摘要。 */
 QString MainWindow::currentConfigDescription() const
 {
     if (ui->comboBoxMode->currentIndex() == 0) {
@@ -2484,6 +2601,7 @@ QString MainWindow::currentConfigDescription() const
              ui->comboBoxParity->currentText());
 }
 
+/** 从旧版命令表的第一条命令构造发送 payload。 */
 QByteArray MainWindow::buildPayload()
 {
     const QList<CommandItem> commands = collectCommands();
@@ -2499,7 +2617,8 @@ QByteArray MainWindow::buildPayload()
     return item.text.toUtf8();
 }
 
-QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &format)
+/** 按数据包原始发送格式生成受限长度的日志显示文本。 */
+QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &format, bool truncate)
 {
     if (payload.isEmpty()) {
         return QStringLiteral("(empty)");
@@ -2514,7 +2633,7 @@ QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &f
             return text;
         };
 
-        if (payload.size() <= kPreviewBytes * 2) {
+        if (!truncate || payload.size() <= kPreviewBytes * 2) {
             return decodeAscii(payload);
         }
 
@@ -2523,7 +2642,7 @@ QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &f
                decodeAscii(payload.right(kPreviewBytes));
     }
 
-    if (payload.size() <= kPreviewBytes * 2) {
+    if (!truncate || payload.size() <= kPreviewBytes * 2) {
         return QString::fromLatin1(payload.toHex(' ').toUpper());
     }
 
@@ -2534,6 +2653,7 @@ QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &f
            QString::fromLatin1(suffix);
 }
 
+/** 将日志中的 HTML 特殊字符转换为安全文本。 */
 QString MainWindow::htmlEscape(const QString &value)
 {
     QString escaped = value;
