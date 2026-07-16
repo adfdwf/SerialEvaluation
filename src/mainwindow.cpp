@@ -1481,21 +1481,9 @@ void MainWindow::sendNextOneShotSerialPacket(SerialPortSession *session)
 /** 使用绝对目标时间安排串口单次队列的下一次发送。 */
 void MainWindow::scheduleNextOneShotSerialPacket(SerialPortSession *session, int intervalMs)
 {
+    Q_UNUSED(intervalMs);
     if (!session || !session->oneShotRunning) return;
-    const qint64 now = session->sendClock.elapsed();
-    if (session->nextOneShotDeadlineMs == 0) session->nextOneShotDeadlineMs = now + intervalMs;
-    else session->nextOneShotDeadlineMs += intervalMs;
-    if (session->nextOneShotDeadlineMs <= now) session->nextOneShotDeadlineMs = now + intervalMs;
-    if (!session->sendTimer) {
-        session->sendTimer = new QTimer(this);
-        session->sendTimer->setSingleShot(true);
-        session->sendTimer->setTimerType(Qt::PreciseTimer);
-        QObject::connect(session->sendTimer, &QTimer::timeout, this, [this, session]() {
-            if (session->oneShotRunning) sendNextOneShotSerialPacket(session);
-            else sendNextSerialPacket(session);
-        });
-    }
-    session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextOneShotDeadlineMs - session->sendClock.elapsed())));
+    sendNextOneShotSerialPacket(session);
 }
 
 /** 启动全部已连接串口的连续性能测试。 */
@@ -1538,7 +1526,7 @@ void MainWindow::startSerialTest()
     ui->comboBoxMode->setEnabled(false);
     if (m_serialPortBox) m_serialPortBox->setEnabled(false);
     m_timeoutTimer->start();
-    appendLog(LogLevel::Info, QStringLiteral("Multi-serial test started: %1 ports, interval %2 ms, timeout %3 ms").arg(active).arg(ui->spinBoxInterval->value()).arg(ui->spinBoxTimeout->value()));
+    appendLog(LogLevel::Info, QStringLiteral("Multi-serial test started: %1 ports, timeout %2 ms").arg(active).arg(ui->spinBoxTimeout->value()));
     for (SerialPortSession *session : m_serialSessions) if (session->testRunning) sendNextSerialPacket(session);
 }
 
@@ -1628,21 +1616,9 @@ void MainWindow::sendNextSerialPacket(SerialPortSession *session)
 /** 使用绝对目标时间安排串口连续测试的下一次发送。 */
 void MainWindow::scheduleNextSerialPacket(SerialPortSession *session, int intervalMs)
 {
+    Q_UNUSED(intervalMs);
     if (!session || !session->testRunning || session->finishingAfterLimit) return;
-    const qint64 now = session->sendClock.elapsed();
-    if (session->nextSendDeadlineMs == 0) session->nextSendDeadlineMs = now + intervalMs;
-    else session->nextSendDeadlineMs += intervalMs;
-    if (session->nextSendDeadlineMs <= now) session->nextSendDeadlineMs = now + intervalMs;
-    if (!session->sendTimer) {
-        session->sendTimer = new QTimer(this);
-        session->sendTimer->setSingleShot(true);
-        session->sendTimer->setTimerType(Qt::PreciseTimer);
-        QObject::connect(session->sendTimer, &QTimer::timeout, this, [this, session]() {
-            if (session->oneShotRunning) sendNextOneShotSerialPacket(session);
-            else sendNextSerialPacket(session);
-        });
-    }
-    session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextSendDeadlineMs - session->sendClock.elapsed())));
+    sendNextSerialPacket(session);
 }
 
 /** 扫描串口会话超时状态，并在全部会话完成后停止测试。 */
@@ -1657,16 +1633,6 @@ void MainWindow::checkSerialTimeouts()
         if (!timedOut.isEmpty()) {
             if (session->testRunning) session->statisticsValid = false;
             session->awaitingResponse = false;
-            if (session->oneShotRunning) {
-                if (session->oneShotCommands.isEmpty()) {
-                    session->oneShotRunning = false;
-                    appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
-                } else {
-                    scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
-                }
-            } else if (session->testRunning && !session->finishingAfterLimit) {
-                scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
-            }
         }
         if (!(session->finishingAfterLimit && !session->statistics.hasPendingPackets()) && session->testRunning) allFinished = false;
         updateSerialSessionStats(session);
@@ -1754,21 +1720,9 @@ void MainWindow::sendNextOneShotTcpPacket(TcpPortSession *session)
 /** 使用绝对目标时间安排 TCP 单次队列的下一次发送。 */
 void MainWindow::scheduleNextOneShotTcpPacket(TcpPortSession *session, int intervalMs)
 {
+    Q_UNUSED(intervalMs);
     if (!session || !session->oneShotRunning) return;
-    const qint64 now = session->sendClock.elapsed();
-    if (session->nextOneShotDeadlineMs == 0) session->nextOneShotDeadlineMs = now + intervalMs;
-    else session->nextOneShotDeadlineMs += intervalMs;
-    if (session->nextOneShotDeadlineMs <= now) session->nextOneShotDeadlineMs = now + intervalMs;
-    if (!session->sendTimer) {
-        session->sendTimer = new QTimer(this);
-        session->sendTimer->setSingleShot(true);
-        session->sendTimer->setTimerType(Qt::PreciseTimer);
-        QObject::connect(session->sendTimer, &QTimer::timeout, this, [this, session]() {
-            if (session->oneShotRunning) sendNextOneShotTcpPacket(session);
-            else sendNextTcpPacket(session);
-        });
-    }
-    session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextOneShotDeadlineMs - session->sendClock.elapsed())));
+    sendNextOneShotTcpPacket(session);
 }
 
 /** 启动所有 TCP 端口的连续性能测试。 */
@@ -1810,8 +1764,8 @@ void MainWindow::startTcpTest()
     m_tcpCommandTabs->setEnabled(false);
     m_tcpPortTable->setEnabled(false);
     m_timeoutTimer->start();
-    appendLog(LogLevel::Info, QStringLiteral("Multi-port test started: %1 ports, interval %2 ms, timeout %3 ms")
-                                 .arg(m_tcpSessions.size()).arg(ui->spinBoxInterval->value()).arg(ui->spinBoxTimeout->value()));
+    appendLog(LogLevel::Info, QStringLiteral("Multi-port test started: %1 ports, timeout %2 ms")
+                                 .arg(m_tcpSessions.size()).arg(ui->spinBoxTimeout->value()));
     for (TcpPortSession *session : m_tcpSessions) sendNextTcpPacket(session);
 }
 
@@ -1906,21 +1860,9 @@ void MainWindow::sendNextTcpPacket(TcpPortSession *session)
 /** 使用绝对目标时间安排 TCP 连续测试的下一次发送。 */
 void MainWindow::scheduleNextTcpPacket(TcpPortSession *session, int intervalMs)
 {
+    Q_UNUSED(intervalMs);
     if (!session || !session->testRunning || session->finishingAfterLimit) return;
-    const qint64 now = session->sendClock.elapsed();
-    if (session->nextSendDeadlineMs == 0) session->nextSendDeadlineMs = now + intervalMs;
-    else session->nextSendDeadlineMs += intervalMs;
-    if (session->nextSendDeadlineMs <= now) session->nextSendDeadlineMs = now + intervalMs;
-    if (!session->sendTimer) {
-        session->sendTimer = new QTimer(this);
-        session->sendTimer->setSingleShot(true);
-        session->sendTimer->setTimerType(Qt::PreciseTimer);
-        QObject::connect(session->sendTimer, &QTimer::timeout, this, [this, session]() {
-            if (session->oneShotRunning) sendNextOneShotTcpPacket(session);
-            else sendNextTcpPacket(session);
-        });
-    }
-    session->sendTimer->start(static_cast<int>(qMax<qint64>(1, session->nextSendDeadlineMs - session->sendClock.elapsed())));
+    sendNextTcpPacket(session);
 }
 
 /** 扫描 TCP 会话超时状态，并在全部会话完成后停止测试。 */
@@ -1935,15 +1877,6 @@ void MainWindow::checkTcpTimeouts()
         if (!timedOut.isEmpty()) {
             if (session->testRunning) session->statisticsValid = false;
             session->awaitingResponse = false;
-            if (session->oneShotRunning) {
-                if (session->oneShotCommands.isEmpty()) {
-                    session->oneShotRunning = false;
-                } else {
-                    scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
-                }
-            } else if (session->testRunning && !session->finishingAfterLimit) {
-                scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
-            }
         }
         if (session->testRunning && !(session->finishingAfterLimit && !session->statistics.hasPendingPackets())) allFinished = false;
     }
