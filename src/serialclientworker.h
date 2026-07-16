@@ -10,6 +10,7 @@
 #include <QString>
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -63,6 +64,8 @@ Q_SIGNALS:
     void signalReceiveTimeout();
 
 private:
+    static constexpr std::size_t kMaxQueuedTasks = 256;
+    static constexpr int kMaxResponseBufferBytes = 8 * 1024 * 1024;
     enum class TaskType { Connect, Disconnect, Send };
     struct Task { TaskType type; QByteArray data; QString format; };
 

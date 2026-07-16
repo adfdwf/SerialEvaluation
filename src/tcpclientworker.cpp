@@ -81,9 +81,15 @@ void TcpClientWorker::enqueue(Task task)
 {
     if (m_stopping.load(std::memory_order_acquire)) return;
     try {
+        bool queueFull = false;
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            m_tasks.emplace_back(std::move(task));
+            if (m_tasks.size() >= kMaxQueuedTasks) queueFull = true;
+            else m_tasks.emplace_back(std::move(task));
+        }
+        if (queueFull) {
+            reportError(QStringLiteral("TCP I/O task queue limit reached; send discarded"));
+            return;
         }
         m_queueCondition.notify_one();
     } catch (const std::bad_alloc &) {
@@ -215,9 +221,15 @@ void TcpClientWorker::ioLoop()
                 ? std::max(1, std::min(10, m_receiveTimeoutMs.load(std::memory_order_acquire) - static_cast<int>(responseTimer.elapsed())))
                 : 5;
             if (socket.waitForReadyRead(pollMs)) {
-                const QByteArray receivedChunk = socket.readAll();
+                const QByteArray receivedChunk = socket.read(64 * 1024);
                 if (waitingForResponse && !expectProtocolFrame) {
-                    rawResponseBuffer.append(receivedChunk);
+                    if (receivedChunk.size() > kMaxResponseBufferBytes || rawResponseBuffer.size() > kMaxResponseBufferBytes - receivedChunk.size()) {
+                        rawResponseBuffer.clear();
+                        waitingForResponse = false;
+                        reportError(QStringLiteral("TCP response buffer limit reached; response discarded"));
+                    } else {
+                        rawResponseBuffer.append(receivedChunk);
+                    }
                     if (rawResponseBuffer.size() >= expectedResponseBytes) {
                         const QByteArray completeResponse = rawResponseBuffer.left(expectedResponseBytes);
                         const int extraBytes = rawResponseBuffer.size() - expectedResponseBytes;

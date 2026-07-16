@@ -1,10 +1,13 @@
 ﻿#include "protocolframedecoder.h"
 
+#include "statisticsmanager.h"
+
 #include <QCoreApplication>
 #include <QDebug>
 
 /** 协议解码器单元测试所使用的命名空间。 */
 using Ciqtek::ProtocolFrameDecoder;
+using Ciqtek::StatisticsManager;
 
 namespace {
 
@@ -125,6 +128,18 @@ int main(int argc, char *argv[])
     ProtocolFrameDecoder largeDecoder;
     const auto largeResult = largeDecoder.appendData(largeFrame);
     passed &= expectFrames(largeResult, {largeFrame}, "4 MiB protocol frame");
+
+    StatisticsManager statistics;
+    for (int i = 0; i < 10000; ++i) {
+        const auto packet = statistics.recordSend(QByteArray("payload"), QStringLiteral("ASCII"));
+        Q_UNUSED(packet);
+        passed &= statistics.pendingPacketCount() == 1;
+        passed &= statistics.recordReceive(QByteArray("response"));
+    }
+    const auto statisticsResult = statistics.snapshot();
+    passed &= statisticsResult.totalSent == 10000;
+    passed &= statisticsResult.successReceived == 10000;
+    passed &= statisticsResult.p50Ms >= 0.0;
 
     if (!passed) {
         qCritical() << "ProtocolFrameDecoder tests failed";

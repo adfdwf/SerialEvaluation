@@ -69,6 +69,8 @@ if(BUILD_TESTING)
         tests/protocolframedecoder_test.cpp
         src/protocolframedecoder.h
         src/protocolframedecoder.cpp
+        src/statisticsmanager.h
+        src/statisticsmanager.cpp
         src/namespace.h
     )
     target_include_directories(ProtocolFrameDecoderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

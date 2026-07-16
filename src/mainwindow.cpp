@@ -554,7 +554,7 @@ void MainWindow::addTcpPort(quint16 port)
     session->logEdit->setLineWrapMode(QTextEdit::NoWrap);
     session->logEdit->setMinimumHeight(360);
     session->logEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    session->logEdit->document()->setMaximumBlockCount(5000);
+    session->logEdit->document()->setMaximumBlockCount(500);
     tcpLogBox->setMinimumHeight(400);
     tcpLogLayout->addWidget(session->logEdit);
     pageLayout->addWidget(tcpLogBox);
@@ -591,6 +591,8 @@ void MainWindow::removeTcpPort(quint16 port)
         delete static_cast<TcpClientWorker *>(session->worker);
         session->worker = nullptr;
     }
+    delete session->sendTimer;
+    session->sendTimer = nullptr;
     const int tabIndex = m_tcpCommandTabs->indexOf(session->commandPage);
     if (tabIndex >= 0) {
         m_tcpCommandTabs->removeTab(tabIndex);
@@ -837,7 +839,7 @@ void MainWindow::addSerialPort(const QString &portName)
     session->logEdit->setLineWrapMode(QTextEdit::NoWrap);
     session->logEdit->setMinimumHeight(360);
     session->logEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    session->logEdit->document()->setMaximumBlockCount(5000);
+    session->logEdit->document()->setMaximumBlockCount(500);
     serialLogBox->setMinimumHeight(400);
     serialLogLayout->addWidget(session->logEdit);
     pageLayout->addWidget(serialLogBox);
@@ -1090,17 +1092,20 @@ void MainWindow::connectTcpPorts()
         auto *worker = new TcpClientWorker(address.toString(), session->port);
         session->worker = worker;
         session->connecting = true;
+        const quint16 sessionPort = session->port;
 
-        QObject::connect(worker, &TcpClientWorker::signalConnected, this, [this, session]() {
-            if (m_tcpSessions.value(session->port) != session) return;
+        QObject::connect(worker, &TcpClientWorker::signalConnected, this, [this, sessionPort, worker]() {
+            TcpPortSession *session = m_tcpSessions.value(sessionPort, nullptr);
+            if (!session || session->worker != worker) return;
             session->connected = true;
             session->connecting = false;
             updateTcpPortRow(session, QStringLiteral("Connected"));
             appendLog(LogLevel::Info, QStringLiteral("[Port %1] Connected").arg(session->port));
             updateTcpConnectionState();
         });
-        QObject::connect(worker, &TcpClientWorker::signalDisconnected, this, [this, session]() {
-            if (m_tcpSessions.value(session->port) != session) return;
+        QObject::connect(worker, &TcpClientWorker::signalDisconnected, this, [this, sessionPort, worker]() {
+            TcpPortSession *session = m_tcpSessions.value(sessionPort, nullptr);
+            if (!session || session->worker != worker) return;
             session->connected = false;
             session->connecting = false;
             updateTcpPortRow(session, QStringLiteral("Disconnected"));
@@ -1111,8 +1116,9 @@ void MainWindow::connectTcpPorts()
             }
             updateTcpConnectionState();
         });
-        QObject::connect(worker, &TcpClientWorker::signalDataReceived, this, [this, session](const QByteArray &data) {
-            if (m_tcpSessions.value(session->port) != session) return;
+        QObject::connect(worker, &TcpClientWorker::signalDataReceived, this, [this, sessionPort, worker](const QByteArray &data) {
+            TcpPortSession *session = m_tcpSessions.value(sessionPort, nullptr);
+            if (!session || session->worker != worker) return;
             PacketInfo packet;
             if (session->statistics.recordReceive(data, &packet)) {
                 appendLog(LogLevel::Rx, QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
@@ -1133,8 +1139,9 @@ void MainWindow::connectTcpPorts()
             }
             scheduleStatsRefresh();
         });
-        QObject::connect(worker, &TcpClientWorker::signalReceiveTimeout, this, [this, session]() {
-            if (m_tcpSessions.value(session->port) != session) return;
+        QObject::connect(worker, &TcpClientWorker::signalReceiveTimeout, this, [this, sessionPort, worker]() {
+            TcpPortSession *session = m_tcpSessions.value(sessionPort, nullptr);
+            if (!session || session->worker != worker) return;
             if (session->testRunning) session->statisticsValid = false;
             session->awaitingResponse = false;
             appendLog(LogLevel::Error, QStringLiteral("[Port %1] recv timeout/lost").arg(session->port));
@@ -1145,8 +1152,9 @@ void MainWindow::connectTcpPorts()
                 scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
             }
         });
-        QObject::connect(worker, &TcpClientWorker::signalErrorOccurred, this, [this, session](const QString &message) {
-            if (m_tcpSessions.value(session->port) == session) {
+        QObject::connect(worker, &TcpClientWorker::signalErrorOccurred, this, [this, sessionPort, worker](const QString &message) {
+            TcpPortSession *session = m_tcpSessions.value(sessionPort, nullptr);
+            if (session && session->worker == worker) {
                 if (session->testRunning) session->statisticsValid = false;
                 appendLog(LogLevel::Error, QStringLiteral("[Port %1] %2").arg(session->port).arg(message));
                 if (session->connecting) {
@@ -1194,6 +1202,8 @@ void MainWindow::destroyTcpWorkers()
             static_cast<TcpClientWorker *>(session->worker)->disconnect();
             delete static_cast<TcpClientWorker *>(session->worker);
         }
+        delete session->sendTimer;
+        session->sendTimer = nullptr;
         session->worker = nullptr;
         session->connected = false;
         session->connecting = false;
@@ -1257,8 +1267,10 @@ void MainWindow::connectSerialPorts()
         auto *worker = new SerialClientWorker(settings);
         session->worker = worker;
         session->connecting = true;
-        QObject::connect(worker, &SerialClientWorker::signalConnected, this, [this, session]() {
-            if (m_serialSessions.value(session->portName) != session) return;
+        const QString sessionPortName = session->portName;
+        QObject::connect(worker, &SerialClientWorker::signalConnected, this, [this, sessionPortName, worker]() {
+            SerialPortSession *session = m_serialSessions.value(sessionPortName, nullptr);
+            if (!session || session->worker != worker) return;
             session->connected = true;
             session->connecting = false;
             if (session->portCombo) session->portCombo->setEnabled(false);
@@ -1266,8 +1278,9 @@ void MainWindow::connectSerialPorts()
             appendLog(LogLevel::Info, QStringLiteral("[%1] Connected").arg(session->portName));
             updateSerialConnectionState();
         });
-        QObject::connect(worker, &SerialClientWorker::signalDisconnected, this, [this, session]() {
-            if (m_serialSessions.value(session->portName) != session) return;
+        QObject::connect(worker, &SerialClientWorker::signalDisconnected, this, [this, sessionPortName, worker]() {
+            SerialPortSession *session = m_serialSessions.value(sessionPortName, nullptr);
+            if (!session || session->worker != worker) return;
             session->connected = false;
             session->connecting = false;
             if (session->portCombo) session->portCombo->setEnabled(true);
@@ -1289,8 +1302,9 @@ void MainWindow::connectSerialPorts()
             }
             updateSerialConnectionState();
         });
-        QObject::connect(worker, &SerialClientWorker::signalDataReceived, this, [this, session](const QByteArray &data) {
-            if (m_serialSessions.value(session->portName) != session) return;
+        QObject::connect(worker, &SerialClientWorker::signalDataReceived, this, [this, sessionPortName, worker](const QByteArray &data) {
+            SerialPortSession *session = m_serialSessions.value(sessionPortName, nullptr);
+            if (!session || session->worker != worker) return;
             PacketInfo packet;
             if (session->statistics.recordReceive(data, &packet)) {
                 appendLog(LogLevel::Rx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
@@ -1312,8 +1326,9 @@ void MainWindow::connectSerialPorts()
             updateSerialSessionStats(session);
             scheduleStatsRefresh();
         });
-        QObject::connect(worker, &SerialClientWorker::signalReceiveTimeout, this, [this, session]() {
-            if (m_serialSessions.value(session->portName) != session) return;
+        QObject::connect(worker, &SerialClientWorker::signalReceiveTimeout, this, [this, sessionPortName, worker]() {
+            SerialPortSession *session = m_serialSessions.value(sessionPortName, nullptr);
+            if (!session || session->worker != worker) return;
             if (session->testRunning) session->statisticsValid = false;
             session->awaitingResponse = false;
             appendLog(LogLevel::Error, QStringLiteral("[%1] recv timeout/lost").arg(session->portName));
@@ -1324,8 +1339,9 @@ void MainWindow::connectSerialPorts()
                 scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
             }
         });
-        QObject::connect(worker, &SerialClientWorker::signalErrorOccurred, this, [this, session](const QString &message) {
-            if (m_serialSessions.value(session->portName) != session) return;
+        QObject::connect(worker, &SerialClientWorker::signalErrorOccurred, this, [this, sessionPortName, worker](const QString &message) {
+            SerialPortSession *session = m_serialSessions.value(sessionPortName, nullptr);
+            if (!session || session->worker != worker) return;
             if (session->testRunning) session->statisticsValid = false;
             appendLog(LogLevel::Error, QStringLiteral("[%1] %2").arg(session->portName, message));
             if (session->connecting) {
@@ -2179,6 +2195,47 @@ void MainWindow::destroyWorker()
 /** 刷新顶部全局统计，并刷新每个动态端口的统计卡片。 */
 void MainWindow::updateStatsView()
 {
+    // 实时刷新只读取流式计数，不遍历历史数据，也不计算分位数。
+    auto updateCounterLabels = [this](const StatisticsSnapshot &snap) {
+        ui->labelTotalSentValue->setText(QString::number(snap.totalSent));
+        ui->labelSuccessValue->setText(QString::number(snap.successReceived));
+        ui->labelLostValue->setText(QString::number(snap.lostPackets));
+        ui->labelRateValue->setText(QStringLiteral("%1%").arg(snap.successRate, 0, 'f', 2));
+        ui->labelAverageValue->setText(QStringLiteral("--"));
+        ui->labelMaxValue->setText(QStringLiteral("--"));
+        ui->labelMinValue->setText(QStringLiteral("--"));
+        if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelTxBytesValue"))) label->setText(QString::number(snap.totalSentBytes));
+        if (auto *label = ui->groupBoxStats->findChild<QLabel *>(QStringLiteral("labelRxBytesValue"))) label->setText(QString::number(snap.totalReceivedBytes));
+        for (const QString &name : {QStringLiteral("labelP50Value"), QStringLiteral("labelP90Value"), QStringLiteral("labelP95Value"), QStringLiteral("labelP99Value")}) {
+            if (auto *label = ui->groupBoxStats->findChild<QLabel *>(name)) label->setText(QStringLiteral("--"));
+        }
+    };
+    auto addCounters = [](StatisticsSnapshot &total, const StatisticsSnapshot &part) {
+        total.totalSent += part.totalSent;
+        total.successReceived += part.successReceived;
+        total.lostPackets += part.lostPackets;
+        total.totalSentBytes += part.totalSentBytes;
+        total.totalReceivedBytes += part.totalReceivedBytes;
+    };
+
+    if (isTcpMode()) {
+        StatisticsSnapshot total;
+        for (const TcpPortSession *session : m_tcpSessions) addCounters(total, session->statistics.countersSnapshot());
+        if (total.totalSent > 0) total.successRate = static_cast<double>(total.successReceived) * 100.0 / static_cast<double>(total.totalSent);
+        updateCounterLabels(total);
+        return;
+    }
+    if (!m_serialSessions.isEmpty()) {
+        StatisticsSnapshot total;
+        for (SerialPortSession *session : m_serialSessions) {
+            addCounters(total, session->statistics.countersSnapshot());
+            updateSerialSessionStats(session);
+        }
+        if (total.totalSent > 0) total.successRate = static_cast<double>(total.successReceived) * 100.0 / static_cast<double>(total.totalSent);
+        updateCounterLabels(total);
+        return;
+    }
+
     if (isTcpMode()) {
         StatisticsSnapshot snap;
         QVector<qint64> elapsedValues;
@@ -2432,7 +2489,11 @@ void MainWindow::appendPortLog(const QString &portTag, const QString &line, cons
         edit = m_serialSessions.value(portTag)->logEdit;
     }
     if (!edit) return;
-    edit->append(QStringLiteral("<span style='color:%1;'>%2</span>").arg(color, line.toHtmlEscaped()));
+    constexpr int kMaxUiLogChars = 2048;
+    const QString preview = line.size() > kMaxUiLogChars
+        ? line.left(kMaxUiLogChars) + QStringLiteral(" ... [truncated]")
+        : line;
+    edit->append(QStringLiteral("<span style='color:%1;'>%2</span>").arg(color, preview.toHtmlEscaped()));
 }
 
 /** 停止旧单 worker 测试、标记未完成包并保存报告。 */

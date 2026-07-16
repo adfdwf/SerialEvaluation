@@ -78,9 +78,15 @@ void SerialClientWorker::enqueue(Task task)
 {
     if (m_stopping.load(std::memory_order_acquire)) return;
     try {
+        bool queueFull = false;
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            m_tasks.emplace_back(std::move(task));
+            if (m_tasks.size() >= kMaxQueuedTasks) queueFull = true;
+            else m_tasks.emplace_back(std::move(task));
+        }
+        if (queueFull) {
+            reportError(QStringLiteral("Serial I/O task queue limit reached; send discarded"));
+            return;
         }
         m_queueCondition.notify_one();
     } catch (const std::bad_alloc &) {
@@ -193,9 +199,15 @@ void SerialClientWorker::ioLoop()
                 ? std::max(1, std::min(10, m_receiveTimeoutMs.load(std::memory_order_acquire) - static_cast<int>(responseTimer.elapsed())))
                 : 5;
             if (serial.waitForReadyRead(pollMs)) {
-                const QByteArray data = serial.readAll();
+                const QByteArray data = serial.read(64 * 1024);
                 if (waitingForResponse && !data.isEmpty()) {
-                    responseBuffer.append(data);
+                    if (data.size() > kMaxResponseBufferBytes || responseBuffer.size() > kMaxResponseBufferBytes - data.size()) {
+                        responseBuffer.clear();
+                        waitingForResponse = false;
+                        reportError(QStringLiteral("Serial response buffer limit reached; response discarded"));
+                    } else {
+                        responseBuffer.append(data);
+                    }
                 }
                 if (waitingForResponse && expectedResponseBytes > 0 && responseBuffer.size() >= expectedResponseBytes) {
                     const QByteArray completeResponse = responseBuffer.left(expectedResponseBytes);
