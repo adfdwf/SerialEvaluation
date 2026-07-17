@@ -215,6 +215,11 @@ private:
     void sendNextTcpPacket(TcpPortSession *session);
     /** @brief 安排 TCP 连续测试的下一次发送。 */
     void scheduleNextTcpPacket(TcpPortSession *session, int intervalMs);
+    /** @brief 处理 TCP 异常响应并恢复发送状态。 */
+    void handleTcpAbnormalResponse(TcpPortSession *session, const QByteArray &data,
+                                   const QString &reason, qint64 elapsedMs);
+    /** @brief 处理 TCP 发送或响应接收失败并恢复发送状态。 */
+    void handleTcpSendFailure(TcpPortSession *session, const QString &reason);
     /** @brief 检查全部 TCP 会话的响应超时。 */
     void checkTcpTimeouts();
     /** @brief 更新 TCP 端口表格中的状态文本。 */
@@ -261,6 +266,11 @@ private:
     void sendNextSerialPacket(SerialPortSession *session);
     /** @brief 安排串口连续测试的下一次发送。 */
     void scheduleNextSerialPacket(SerialPortSession *session, int intervalMs);
+    /** @brief 处理串口异常响应并恢复发送状态。 */
+    void handleSerialAbnormalResponse(SerialPortSession *session, const QByteArray &data,
+                                      const QString &reason, qint64 elapsedMs);
+    /** @brief 处理串口发送或响应接收失败并恢复发送状态。 */
+    void handleSerialSendFailure(SerialPortSession *session, const QString &reason);
     /** @brief 检查全部串口会话的响应超时。 */
     void checkSerialTimeouts();
     /** @brief 更新单个串口标签页的统计卡片。 */
