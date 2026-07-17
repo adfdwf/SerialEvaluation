@@ -1,10 +1,14 @@
 ﻿#include "protocolframedecoder.h"
 
+#include "statisticsmanager.h"
+
 #include <QCoreApplication>
 #include <QDebug>
 
 /** 协议解码器单元测试所使用的命名空间。 */
 using Ciqtek::ProtocolFrameDecoder;
+using Ciqtek::PacketInfo;
+using Ciqtek::StatisticsManager;
 
 namespace {
 
@@ -125,6 +129,40 @@ int main(int argc, char *argv[])
     ProtocolFrameDecoder largeDecoder;
     const auto largeResult = largeDecoder.appendData(largeFrame);
     passed &= expectFrames(largeResult, {largeFrame}, "4 MiB protocol frame");
+
+    StatisticsManager statistics;
+    for (int i = 0; i < 10000; ++i) {
+        const auto packet = statistics.recordSend(QByteArray("payload"), QStringLiteral("ASCII"));
+        Q_UNUSED(packet);
+        passed &= statistics.pendingPacketCount() == 1;
+        passed &= statistics.recordReceive(QByteArray("response"));
+    }
+    const auto statisticsResult = statistics.snapshot();
+    passed &= statisticsResult.totalSent == 10000;
+    passed &= statisticsResult.successReceived == 10000;
+    passed &= statisticsResult.p50Ms >= 0.0;
+
+    StatisticsManager lostStatistics;
+    lostStatistics.recordSend(QByteArray("1234"), QStringLiteral("ASCII"));
+    PacketInfo lostPacket;
+    passed &= lostStatistics.markOldestPendingLost(56, &lostPacket);
+    const auto lostResult = lostStatistics.snapshot();
+    passed &= lostPacket.status == PacketInfo::Status::Timeout;
+    passed &= lostResult.totalSent == 1;
+    passed &= lostResult.successReceived == 0;
+    passed &= lostResult.lostPackets == 1;
+    passed &= lostResult.totalReceivedBytes == 0;
+    passed &= lostResult.successRate == 0.0;
+
+    lostStatistics.recordSend(QByteArray("5678"), QStringLiteral("ASCII"));
+    PacketInfo invalidPacket;
+    passed &= lostStatistics.markOldestPendingLost(42, &invalidPacket);
+    const auto invalidResult = lostStatistics.snapshot();
+    passed &= invalidPacket.status == PacketInfo::Status::Timeout;
+    passed &= invalidResult.totalSent == 2;
+    passed &= invalidResult.successReceived == 0;
+    passed &= invalidResult.lostPackets == 2;
+    passed &= invalidResult.totalReceivedBytes == 0;
 
     if (!passed) {
         qCritical() << "ProtocolFrameDecoder tests failed";

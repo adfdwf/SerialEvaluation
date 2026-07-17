@@ -61,6 +61,7 @@ struct TcpPortSession {
     QQueue<CommandItem> oneShotCommands;      ///< 单端口 Send All 尚未发送的命令队列。
     bool oneShotRunning = false;              ///< 是否正在执行单次批量发送。
     bool awaitingResponse = false;             ///< 当前任务是否正在等待 recv 或 Timeout。
+    bool statisticsValid = true;               ///< 本轮测试是否可以生成耗时统计。
     qint64 nextOneShotDeadlineMs = 0;          ///< 下一条单次命令的目标发送时间。
 };
 
@@ -89,6 +90,7 @@ struct SerialPortSession {
     QQueue<CommandItem> oneShotCommands;      ///< 单串口 Send All 尚未发送的命令队列。
     bool oneShotRunning = false;              ///< 是否正在执行单次批量发送。
     bool awaitingResponse = false;             ///< 当前任务是否正在等待 recv 或 Timeout。
+    bool statisticsValid = true;               ///< 本轮测试是否可以生成耗时统计。
     qint64 nextOneShotDeadlineMs = 0;          ///< 下一条单次命令的目标发送时间。
 };
 
@@ -120,29 +122,12 @@ private Q_SLOTS:
     void slotStartClicked();
     /** @brief 停止连续发送测试。 */
     void slotStopClicked();
-    /** @brief 兼容旧的单 worker 连续发送定时槽。 */
-    void slotSendNextPacket();
-    /** @brief 周期性检查旧单 worker 的响应超时。 */
+    /** @brief 周期检查各端口的响应超时和测试完成状态。 */
     void slotCheckTimeouts();
-    /** @brief 旧单 worker 连接成功回调。 */
-    void slotWorkerConnected();
-    /** @brief 旧单 worker 断开回调。 */
-    void slotWorkerDisconnected();
-    /** @brief 旧单 worker 数据接收回调。 */
-    void slotWorkerDataReceived(const QByteArray &data);
-    /** @brief 旧单 worker 错误回调。 */
-    void slotWorkerError(const QString &message);
-
-    /** @brief 向旧串口命令表添加一行命令。 */
-    void slotAddCommandRow();
-    /** @brief 从旧串口命令表删除当前行。 */
-    void slotRemoveCommandRow();
-    /** @brief 校验旧串口命令文本并更新输入框样式。 */
-    void slotCommandTextChanged();
-    /** @brief 响应旧串口命令的 ASCII/HEX 单选切换。 */
-    void slotHexModeToggled();
     /** @brief 动态添加 TCP 端口。 */
     void slotAddTcpPort();
+    /** @brief 批量添加 TCP 端口。 */
+    void slotBatchAddTcpPorts();
     /** @brief 删除选中的 TCP 端口。 */
     void slotRemoveTcpPort();
     /** @brief 对选中的 TCP 端口执行 Send All。 */
@@ -176,51 +161,23 @@ private:
     void setupUiLogic();
     /** @brief 应用窗口标题和基础工业风格。 */
     void applyIndustrialTheme();
-    /** @brief 更新顶部连接状态文本、颜色和按钮。 */
-    void setConnectionState(ConnectionState state);
-    /** @brief 创建兼容旧模式的单 worker。 */
-    void createWorker();
-    /** @brief 停止并释放兼容旧模式的单 worker 线程。 */
-    void destroyWorker();
-    /** @brief 刷新顶部全局统计和各端口统计卡片。 */
+    /** @brief 刷新各端口统计卡片。 */
     void updateStatsView();
     /** @brief 将一条日志写入 UI，并限制屏幕预览长度。 */
     void appendLog(LogLevel level, const QString &text, qint64 elapsedMs = -1);
-    /** @brief 停止旧单 worker 测试并生成报告。 */
-    void stopTest(bool manualStop);
-    /** @brief 根据当前模式生成测试报告。 */
-    void finalizeTestReport();
-    /** @brief 检查旧单 worker 是否已经完成发送上限。 */
-    void checkFinishAfterLimit();
-    /** @brief 返回当前 TCP 或串口模式的可读名称。 */
-    QString currentModeDescription() const;
-    /** @brief 返回当前模式的配置摘要。 */
-    QString currentConfigDescription() const;
-    /** @brief 从旧命令表构造第一条发送 payload。 */
-    QByteArray buildPayload();
     /** @brief 根据 ASCII/HEX 格式将响应转换为日志显示文本。 */
     QString payloadToDisplay(const QByteArray &payload,
                              const QString &format = QString(),
                              bool truncate = true);
 
-    /** @brief 初始化旧串口命令表。 */
-    void setupCommandTable();
-    /** @brief 将命令列表填充回旧串口命令表。 */
-    void populateCommandTableFromList();
-    /** @brief 从旧串口命令表收集命令。 */
-    QList<CommandItem> collectCommands();
     /** @brief 判断一个字符是否为十六进制字符。 */
     static bool isValidHexChar(QChar c);
     /** @brief 校验 HEX 文本的偶数位和字符语法。 */
     static bool validateHexSyntax(const QString &text);
     /** @brief 校验 A0 81 帧长度和校验和。 */
     static bool validateHexPayload(const QString &text);
-    /** @brief 在全局统计面板中增加 P50/P90/P95/P99 行。 */
-    void setupStatsLabels();
     /** @brief 请求统计面板在下一次定时刷新。 */
     void scheduleStatsRefresh();
-    /** @brief 按绝对目标时间安排旧单 worker 下一次发送。 */
-    void scheduleNextSend(int intervalMs);
 
     /** @brief 判断当前是否为 TCP Network 模式。 */
     bool isTcpMode() const;
@@ -258,15 +215,17 @@ private:
     void sendNextTcpPacket(TcpPortSession *session);
     /** @brief 安排 TCP 连续测试的下一次发送。 */
     void scheduleNextTcpPacket(TcpPortSession *session, int intervalMs);
+    /** @brief 处理 TCP 异常响应并恢复发送状态。 */
+    void handleTcpAbnormalResponse(TcpPortSession *session, const QByteArray &data,
+                                   const QString &reason, qint64 elapsedMs);
+    /** @brief 处理 TCP 发送或响应接收失败并恢复发送状态。 */
+    void handleTcpSendFailure(TcpPortSession *session, const QString &reason);
     /** @brief 检查全部 TCP 会话的响应超时。 */
     void checkTcpTimeouts();
     /** @brief 更新 TCP 端口表格中的状态文本。 */
     void updateTcpPortRow(TcpPortSession *session, const QString &state);
     /** @brief 汇总 TCP 会话连接状态并更新顶部控件。 */
     void updateTcpConnectionState();
-    /** @brief 写出多 TCP 端口报告。 */
-    void finalizeTcpReport();
-
     /** @brief 创建串口多端口动态 UI。 */
     void setupSerialPortUi();
     /** @brief 创建一个串口会话和对应标签页。 */
@@ -307,39 +266,39 @@ private:
     void sendNextSerialPacket(SerialPortSession *session);
     /** @brief 安排串口连续测试的下一次发送。 */
     void scheduleNextSerialPacket(SerialPortSession *session, int intervalMs);
+    /** @brief 处理串口异常响应并恢复发送状态。 */
+    void handleSerialAbnormalResponse(SerialPortSession *session, const QByteArray &data,
+                                      const QString &reason, qint64 elapsedMs);
+    /** @brief 处理串口发送或响应接收失败并恢复发送状态。 */
+    void handleSerialSendFailure(SerialPortSession *session, const QString &reason);
     /** @brief 检查全部串口会话的响应超时。 */
     void checkSerialTimeouts();
     /** @brief 更新单个串口标签页的统计卡片。 */
     void updateSerialSessionStats(SerialPortSession *session);
-    /** @brief 写出按串口分区的报告文件。 */
-    void finalizeSerialReport();
+    /** @brief 更新单个 TCP 端口标签页的实时统计卡片。 */
+    void updateTcpSessionStats(TcpPortSession *session);
     /** @brief 刷新每个串口标签页中的可用端口候选项。 */
     void refreshSerialPortChoices();
     /** @brief 将一条事件直接追加到对应端口的本地日志文件。 */
     void appendLogFile(const QString &portTag, const QString &line);
     /** @brief 将端口日志事件显示到对应的独立日志区域。 */
     void appendPortLog(const QString &portTag, const QString &line, const QString &color);
+    /** @brief 将当前 TCP 端口的全部界面参数写入该端口日志。 */
+    void logTcpSessionParameters(const TcpPortSession *session, const QString &testType);
+    /** @brief 将当前串口的全部界面参数写入该串口日志。 */
+    void logSerialSessionParameters(const SerialPortSession *session, const QString &testType);
 
 private:
     Ui::MainWindow *ui = nullptr;                         ///< Qt Designer 生成的控件集合。
-    QObject *m_workerObject = nullptr;                    ///< 旧单 worker 的通用指针。
-    ICommunicationInterface *m_commInterface = nullptr;   ///< 旧单 worker 的通信接口指针。
     bool m_connected = false;                              ///< 当前模式的全局连接标志。
-    StatisticsManager m_statistics;                        ///< 旧单 worker 的统计管理器。
-    QTimer *m_sendTimer = nullptr;                         ///< 旧单 worker 的单次精准发送定时器。
     QTimer *m_timeoutTimer = nullptr;                      ///< 全局超时检查定时器。
     QTimer *m_statsTimer = nullptr;                        ///< 实时统计刷新定时器。
-    QElapsedTimer m_sendClock;                             ///< 旧单 worker 的发送调度时钟。
-    qint64 m_nextSendDeadlineMs = 0;                       ///< 旧单 worker 下一次发送目标时间。
     bool m_testRunning = false;                             ///< 当前是否有连续测试运行。
-    bool m_finishingAfterLimit = false;                     ///< 旧单 worker 是否等待最后响应。
-    int m_currentCommandIndex = 0;                         ///< 旧命令表下一条命令下标。
-    int m_totalCommands = 0;                                ///< 旧命令表命令总数。
-    QVector<int> m_perCommandSendCount;                     ///< 旧命令表每条命令发送次数。
     QHash<quint16, TcpPortSession *> m_tcpSessions;        ///< TCP 端口号到会话对象的映射。
     QTableWidget *m_tcpPortTable = nullptr;                 ///< TCP 端口状态表格。
     QTabWidget *m_tcpCommandTabs = nullptr;                 ///< TCP 端口命令标签页。
     QPushButton *m_tcpAddPortButton = nullptr;              ///< TCP 添加端口按钮。
+    QPushButton *m_tcpBatchAddPortButton = nullptr;         ///< TCP 批量添加端口按钮。
     QPushButton *m_tcpRemovePortButton = nullptr;           ///< TCP 删除端口按钮。
     QPushButton *m_tcpSendAllButton = nullptr;              ///< TCP 全局 Send All 按钮。
     QHash<QString, SerialPortSession *> m_serialSessions;  ///< 串口名到会话对象的映射。
@@ -351,6 +310,7 @@ private:
     QPushButton *m_serialRefreshButton = nullptr;           ///< 串口刷新按钮。
     QPushButton *m_serialSendAllButton = nullptr;           ///< 串口全局 Send All 按钮。
     QTimer *m_serialHotplugTimer = nullptr;                 ///< 串口热插拔轮询定时器。
+    QHash<QString, QString> m_logFilePaths;                 ///< 端口到当前本地日志文件路径的映射。
     QHash<quint16, StatisticsSnapshot> m_tcpFinalStats;     ///< TCP worker 停止时返回的最终统计。
     QHash<QString, StatisticsSnapshot> m_serialFinalStats;  ///< 串口 worker 停止时返回的最终统计。
 };

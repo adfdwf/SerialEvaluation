@@ -47,6 +47,7 @@ private:
     static constexpr int kMinimumFrameSize = kHeaderSize + kChecksumSize; ///< 空 payload 请求帧长度。
     static constexpr int kResponseFrameSize = 9; ///< 当前设备响应的固定长度。
     static constexpr quint32 kMaximumPayloadLength = 4 * 1024 * 1024; ///< 单帧 payload 上限。
+    static constexpr int kMaximumBufferedBytes = 8 * 1024 * 1024; ///< 解码器缓存硬上限。
 
     /** @brief 从缓存的长度字段读取 payload 长度。 */
     quint32 payloadLength() const;
@@ -66,11 +67,17 @@ private:
 
 inline ProtocolFrameDecoder::DecodeResult ProtocolFrameDecoder::appendData(const QByteArray &data)
 {
+    DecodeResult result;
+    if (data.size() > kMaximumBufferedBytes || m_buffer.size() > kMaximumBufferedBytes - data.size()) {
+        m_buffer.clear();
+        result.errors.push_back(QStringLiteral("TCP decoder buffer limit reached; buffered data discarded"));
+        return result;
+    }
+
     // 将新到达的 TCP 字节追加到半帧缓存中。
     m_buffer.append(data);
 
     // result 记录本次调用产生的帧、错误以及重新同步信息。
-    DecodeResult result;
     while (!m_buffer.isEmpty()) {
         // 分别寻找请求头和响应头，较早出现的头决定当前帧类型。
         const int requestIndex = findHeader(m_buffer);

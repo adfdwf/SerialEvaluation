@@ -10,6 +10,7 @@
 #include <QString>
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -41,10 +42,11 @@ public:
 
     /** @brief Set the receive wait budget used by the I/O polling loop. */
     void setReceiveTimeout(int timeoutMs);
+    void setSendInterval(int intervalMs);
     /** @brief 清空本端口线程的统计数据。 */
     void resetStatistics();
     /** @brief 结束本轮统计并返回最终快照。 */
-    StatisticsSnapshot finalStatisticsSnapshot();
+    bool finalStatisticsSnapshot(StatisticsSnapshot *snapshot);
     /** @brief 将带格式信息的发送任务放入队列。 */
     void sendDataWithFormat(const QByteArray &data, const QString &format);
 
@@ -57,28 +59,37 @@ public Q_SLOTS:
 Q_SIGNALS:
     void signalConnected();
     void signalDisconnected();
-    void signalDataReceived(const QByteArray &data);
+    void signalDataReceived(const QByteArray &data, bool responseValid);
     void signalErrorOccurred(const QString &message);
+    void signalSendFailed(const QString &message);
+    void signalResponseAborted(const QString &message);
     void signalBytesWritten(qint64 bytes);
+    void signalDataSent(const QByteArray &data, const QString &format);
     void signalReceiveTimeout();
 
 private:
+    static constexpr std::size_t kMaxQueuedTasks = 256;
+    static constexpr int kMaxResponseBufferBytes = 8 * 1024 * 1024;
     enum class TaskType { Connect, Disconnect, Send };
     struct Task { TaskType type; QByteArray data; QString format; };
 
     void enqueue(Task task);
+    void markStatisticsInvalid();
+    void reportError(const QString &message);
     void ioLoop();
 
     SerialSettings m_settings;
     std::atomic_bool m_stopping{false};
     std::atomic_bool m_connected{false};
     std::atomic_int m_receiveTimeoutMs{300};
+    std::atomic_int m_sendIntervalMs{0};
     mutable std::mutex m_queueMutex;
     std::condition_variable m_queueCondition;
     std::deque<Task> m_tasks;
     std::thread m_ioThread;
     mutable std::mutex m_statsMutex;
     StatisticsManager m_statistics;
+    bool m_statisticsValid = true;
 };
 
 END_NAMESPACE_CIQTEK
