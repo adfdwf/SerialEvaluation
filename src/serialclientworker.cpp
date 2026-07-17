@@ -82,6 +82,7 @@ bool SerialClientWorker::isConnected() const
 void SerialClientWorker::enqueue(Task task)
 {
     if (m_stopping.load(std::memory_order_acquire)) return;
+    const bool isSendTask = task.type == TaskType::Send;
     try {
         bool queueFull = false;
         {
@@ -90,12 +91,16 @@ void SerialClientWorker::enqueue(Task task)
             else m_tasks.emplace_back(std::move(task));
         }
         if (queueFull) {
-            reportError(QStringLiteral("Serial I/O task queue limit reached; send discarded"));
+            const QString message = QStringLiteral("Serial I/O task queue limit reached; send discarded");
+            reportError(message);
+            if (isSendTask) emit signalSendFailed(message);
             return;
         }
         m_queueCondition.notify_one();
     } catch (const std::bad_alloc &) {
-        reportError(QStringLiteral("Insufficient memory while queuing serial send"));
+        const QString message = QStringLiteral("Insufficient memory while queuing serial send");
+        reportError(message);
+        if (isSendTask) emit signalSendFailed(message);
     }
 }
 
@@ -219,6 +224,7 @@ void SerialClientWorker::ioLoop()
                             m_statistics.markAllPendingLost();
                         }
                         reportError(errorMessage);
+                        emit signalSendFailed(errorMessage);
                     } else {
                         {
                             std::lock_guard<std::mutex> lock(m_statsMutex);
@@ -245,7 +251,9 @@ void SerialClientWorker::ioLoop()
                     if (data.size() > kMaxResponseBufferBytes || responseBuffer.size() > kMaxResponseBufferBytes - data.size()) {
                         responseBuffer.clear();
                         waitingForResponse = false;
-                        reportError(QStringLiteral("Serial response buffer limit reached; response discarded"));
+                        const QString message = QStringLiteral("Serial response buffer limit reached; response discarded");
+                        reportError(message);
+                        emit signalResponseAborted(message);
                     } else {
                         responseBuffer.append(data);
                     }

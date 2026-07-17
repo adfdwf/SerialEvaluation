@@ -61,6 +61,8 @@ Q_SIGNALS:
     void signalDisconnected();
     void signalDataReceived(const QByteArray &data, bool responseValid);
     void signalErrorOccurred(const QString &message);
+    void signalSendFailed(const QString &message);
+    void signalResponseAborted(const QString &message);
     void signalBytesWritten(qint64 bytes);
     void signalDataSent(const QByteArray &data, const QString &format);
     void signalReceiveTimeout();
