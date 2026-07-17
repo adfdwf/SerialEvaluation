@@ -88,4 +88,12 @@ if(BUILD_TESTING)
     target_link_libraries(TcpPortParserTest PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME TcpPortParserTest COMMAND TcpPortParserTest)
 
+    add_executable(ResponseTimingTest
+        tests/responsetiming_test.cpp
+        src/responsetiming.h
+    )
+    target_include_directories(ResponseTimingTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ResponseTimingTest PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+    add_test(NAME ResponseTimingTest COMMAND ResponseTimingTest)
+
 endif()

@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "responsetiming.h"
 #include "serialclientworker.h"
 #include "tcpclientworker.h"
 #include "tcpportparser.h"
@@ -982,7 +983,14 @@ void MainWindow::connectTcpPorts()
                 } else if (session->testRunning) {
                     scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
                 }
-                appendLog(LogLevel::Rx, QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
+                const bool responseTimedOut = responseReachedTimeout(packet.elapsedMs, ui->spinBoxTimeout->value());
+                const LogLevel responseLevel = responseTimedOut ? LogLevel::Error : LogLevel::Rx;
+                const QString responseText = responseTimedOut
+                    ? QStringLiteral("[Port %1] #%2 %3 (response exceeded Timeout %4 ms)")
+                          .arg(session->port).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)).arg(ui->spinBoxTimeout->value())
+                    : QStringLiteral("[Port %1] #%2 %3").arg(session->port).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false));
+                appendLog(responseLevel, responseText, packet.elapsedMs);
+                if (responseTimedOut && session->testRunning) session->statisticsValid = false;
                 if (!session->oneShotRunning && session->oneShotCommands.isEmpty() && !session->testRunning) {
                     appendLog(LogLevel::Info, QStringLiteral("[Port %1] Send complete").arg(session->port));
                 }
@@ -1178,7 +1186,14 @@ void MainWindow::connectSerialPorts()
                 } else if (session->testRunning) {
                     scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
                 }
-                appendLog(LogLevel::Rx, QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)), packet.elapsedMs);
+                const bool responseTimedOut = responseReachedTimeout(packet.elapsedMs, ui->spinBoxTimeout->value());
+                const LogLevel responseLevel = responseTimedOut ? LogLevel::Error : LogLevel::Rx;
+                const QString responseText = responseTimedOut
+                    ? QStringLiteral("[%1] #%2 %3 (response exceeded Timeout %4 ms)")
+                          .arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false)).arg(ui->spinBoxTimeout->value())
+                    : QStringLiteral("[%1] #%2 %3").arg(session->portName).arg(packet.id).arg(payloadToDisplay(data, packet.txFormat, false));
+                appendLog(responseLevel, responseText, packet.elapsedMs);
+                if (responseTimedOut && session->testRunning) session->statisticsValid = false;
                 if (!session->oneShotRunning && session->oneShotCommands.isEmpty() && !session->testRunning) {
                     appendLog(LogLevel::Info, QStringLiteral("[%1] Send complete").arg(session->portName));
                 }
@@ -1922,7 +1937,7 @@ void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs
         color = QStringLiteral("#42d392");
         break;
     case LogLevel::Error:
-        tag = QStringLiteral("Error");
+        tag = QStringLiteral("ERROR");
         color = QStringLiteral("#ff3333");
         break;
     case LogLevel::Info:
