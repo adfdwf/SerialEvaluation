@@ -997,7 +997,12 @@ void MainWindow::connectTcpPorts()
                 }
             } else {
                 if (session->testRunning) session->statisticsValid = false;
-                appendLog(LogLevel::Rx, QStringLiteral("[Port %1] Unmatched response %2").arg(session->port).arg(payloadToDisplay(data, QString(), false)));
+                appendLog(LogLevel::Error, QStringLiteral("[Port %1] Unmatched or late response %2").arg(session->port).arg(payloadToDisplay(data, QString(), false)));
+                if (session->oneShotRunning && !session->awaitingResponse) {
+                    scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
+                } else if (session->testRunning && !session->awaitingResponse && !session->finishingAfterLimit) {
+                    scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
+                }
             }
             scheduleStatsRefresh();
         });
@@ -1014,12 +1019,17 @@ void MainWindow::connectTcpPorts()
             if (!session || session->worker != worker) return;
             if (!session->testRunning && !session->oneShotRunning) return;
             if (session->testRunning) session->statisticsValid = false;
+            session->statistics.markTimeouts(ui->spinBoxTimeout->value());
             session->awaitingResponse = false;
             if (session->oneShotRunning) {
                 if (session->oneShotCommands.isEmpty()) session->oneShotRunning = false;
                 else scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
-            } else if (session->testRunning && !session->finishingAfterLimit) {
-                scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
+            } else if (session->testRunning) {
+                if (session->finishingAfterLimit) {
+                    if (!session->statistics.hasPendingPackets()) stopTcpTest(false);
+                } else {
+                    scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
+                }
             }
             appendLog(LogLevel::Error, QStringLiteral("[Port %1] recv timeout/lost").arg(session->port));
         });
@@ -1203,7 +1213,12 @@ void MainWindow::connectSerialPorts()
                 }
             } else {
                 if (session->testRunning) session->statisticsValid = false;
-                appendLog(LogLevel::Rx, QStringLiteral("[%1] Unmatched response %2").arg(session->portName).arg(payloadToDisplay(data, QString(), false)));
+                appendLog(LogLevel::Error, QStringLiteral("[%1] Unmatched or late response %2").arg(session->portName).arg(payloadToDisplay(data, QString(), false)));
+                if (session->oneShotRunning && !session->awaitingResponse) {
+                    scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
+                } else if (session->testRunning && !session->awaitingResponse && !session->finishingAfterLimit) {
+                    scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
+                }
             }
             updateSerialSessionStats(session);
             scheduleStatsRefresh();
@@ -1221,12 +1236,17 @@ void MainWindow::connectSerialPorts()
             if (!session || session->worker != worker) return;
             if (!session->testRunning && !session->oneShotRunning) return;
             if (session->testRunning) session->statisticsValid = false;
+            session->statistics.markTimeouts(ui->spinBoxTimeout->value());
             session->awaitingResponse = false;
             if (session->oneShotRunning) {
                 if (session->oneShotCommands.isEmpty()) session->oneShotRunning = false;
                 else scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
-            } else if (session->testRunning && !session->finishingAfterLimit) {
-                scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
+            } else if (session->testRunning) {
+                if (session->finishingAfterLimit) {
+                    if (!session->statistics.hasPendingPackets()) stopSerialTest(false);
+                } else {
+                    scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
+                }
             }
             appendLog(LogLevel::Error, QStringLiteral("[%1] recv timeout/lost").arg(session->portName));
         });
@@ -1532,11 +1552,6 @@ void MainWindow::checkSerialTimeouts()
     for (SerialPortSession *session : m_serialSessions) {
         if (!session->testRunning && !session->oneShotRunning) continue;
         if (session->testRunning) hasTest = true;
-        const QVector<PacketInfo> timedOut = session->statistics.markTimeouts(ui->spinBoxTimeout->value());
-        if (!timedOut.isEmpty()) {
-            if (session->testRunning) session->statisticsValid = false;
-            session->awaitingResponse = false;
-        }
         if (!(session->finishingAfterLimit && !session->statistics.hasPendingPackets()) && session->testRunning) allFinished = false;
         updateSerialSessionStats(session);
     }
@@ -1773,11 +1788,6 @@ void MainWindow::checkTcpTimeouts()
     for (TcpPortSession *session : m_tcpSessions) {
         if (!session->testRunning && !session->oneShotRunning) continue;
         if (session->testRunning) hasTest = true;
-        const QVector<PacketInfo> timedOut = session->statistics.markTimeouts(ui->spinBoxTimeout->value());
-        if (!timedOut.isEmpty()) {
-            if (session->testRunning) session->statisticsValid = false;
-            session->awaitingResponse = false;
-        }
         if (session->testRunning && !(session->finishingAfterLimit && !session->statistics.hasPendingPackets())) allFinished = false;
     }
     if (hasTest && allFinished) stopTcpTest(false);
