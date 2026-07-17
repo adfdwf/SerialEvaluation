@@ -154,6 +154,16 @@ int main(int argc, char *argv[])
     passed &= lostResult.totalReceivedBytes == 0;
     passed &= lostResult.successRate == 0.0;
 
+    lostStatistics.recordSend(QByteArray("5678"), QStringLiteral("ASCII"));
+    PacketInfo invalidPacket;
+    passed &= lostStatistics.markOldestPendingLost(42, &invalidPacket);
+    const auto invalidResult = lostStatistics.snapshot();
+    passed &= invalidPacket.status == PacketInfo::Status::Timeout;
+    passed &= invalidResult.totalSent == 2;
+    passed &= invalidResult.successReceived == 0;
+    passed &= invalidResult.lostPackets == 2;
+    passed &= invalidResult.totalReceivedBytes == 0;
+
     if (!passed) {
         qCritical() << "ProtocolFrameDecoder tests failed";
         return 1;
