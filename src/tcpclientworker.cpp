@@ -85,6 +85,7 @@ bool TcpClientWorker::isConnected() const
 void TcpClientWorker::enqueue(Task task)
 {
     if (m_stopping.load(std::memory_order_acquire)) return;
+    const bool isSendTask = task.type == TaskType::Send;
     try {
         bool queueFull = false;
         {
@@ -93,12 +94,16 @@ void TcpClientWorker::enqueue(Task task)
             else m_tasks.emplace_back(std::move(task));
         }
         if (queueFull) {
-            reportError(QStringLiteral("TCP I/O task queue limit reached; send discarded"));
+            const QString message = QStringLiteral("TCP I/O task queue limit reached; send discarded");
+            reportError(message);
+            if (isSendTask) emit signalSendFailed(message);
             return;
         }
         m_queueCondition.notify_one();
     } catch (const std::bad_alloc &) {
-        reportError(QStringLiteral("Insufficient memory while queuing TCP send"));
+        const QString message = QStringLiteral("Insufficient memory while queuing TCP send");
+        reportError(message);
+        if (isSendTask) emit signalSendFailed(message);
     }
 }
 
@@ -234,6 +239,7 @@ void TcpClientWorker::ioLoop()
                             m_statistics.markAllPendingLost();
                         }
                         reportError(errorMessage);
+                        emit signalSendFailed(errorMessage);
                     } else {
                         socket.flush();
                         {
@@ -267,7 +273,9 @@ void TcpClientWorker::ioLoop()
                     if (receivedChunk.size() > kMaxResponseBufferBytes || rawResponseBuffer.size() > kMaxResponseBufferBytes - receivedChunk.size()) {
                         rawResponseBuffer.clear();
                         waitingForResponse = false;
-                        reportError(QStringLiteral("TCP response buffer limit reached; response discarded"));
+                        const QString message = QStringLiteral("TCP response buffer limit reached; response discarded");
+                        reportError(message);
+                        emit signalResponseAborted(message);
                     } else {
                         rawResponseBuffer.append(receivedChunk);
                     }
