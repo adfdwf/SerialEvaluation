@@ -7,6 +7,7 @@
 
 /** 协议解码器单元测试所使用的命名空间。 */
 using Ciqtek::ProtocolFrameDecoder;
+using Ciqtek::PacketInfo;
 using Ciqtek::StatisticsManager;
 
 namespace {
@@ -140,6 +141,18 @@ int main(int argc, char *argv[])
     passed &= statisticsResult.totalSent == 10000;
     passed &= statisticsResult.successReceived == 10000;
     passed &= statisticsResult.p50Ms >= 0.0;
+
+    StatisticsManager lostStatistics;
+    lostStatistics.recordSend(QByteArray("1234"), QStringLiteral("ASCII"));
+    PacketInfo lostPacket;
+    passed &= lostStatistics.markOldestPendingLost(56, &lostPacket);
+    const auto lostResult = lostStatistics.snapshot();
+    passed &= lostPacket.status == PacketInfo::Status::Timeout;
+    passed &= lostResult.totalSent == 1;
+    passed &= lostResult.successReceived == 0;
+    passed &= lostResult.lostPackets == 1;
+    passed &= lostResult.totalReceivedBytes == 0;
+    passed &= lostResult.successRate == 0.0;
 
     if (!passed) {
         qCritical() << "ProtocolFrameDecoder tests failed";

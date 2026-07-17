@@ -74,6 +74,8 @@ public:
     void reset();
     PacketInfo recordSend(const QByteArray &payload, const QString &format = QString());
     bool recordReceive(const QByteArray &payload, PacketInfo *updatedPacket = nullptr);
+    bool oldestPendingElapsed(qint64 *elapsedMs) const;
+    bool markOldestPendingLost(qint64 elapsedMs, PacketInfo *updatedPacket = nullptr);
     QVector<PacketInfo> markTimeouts(qint64 timeoutMs);
     QVector<PacketInfo> markAllPendingLost();
     bool hasPendingPackets() const;

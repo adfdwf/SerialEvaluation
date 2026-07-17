@@ -968,12 +968,35 @@ void MainWindow::connectTcpPorts()
             }
             updateTcpConnectionState();
         });
-        QObject::connect(worker, &TcpClientWorker::signalDataReceived, this, [this, sessionPort, worker](const QByteArray &data) {
+        QObject::connect(worker, &TcpClientWorker::signalDataReceived, this, [this, sessionPort, worker](const QByteArray &data, bool responseValid) {
             TcpPortSession *session = m_tcpSessions.value(sessionPort, nullptr);
             if (!session || session->worker != worker) return;
             if (!session->testRunning && !session->oneShotRunning) return;
             PacketInfo packet;
-            if (session->statistics.recordReceive(data, &packet)) {
+            qint64 pendingElapsedMs = 0;
+            const bool hasPending = session->statistics.oldestPendingElapsed(&pendingElapsedMs);
+            const bool responseTimedOut = hasPending && responseReachedTimeout(pendingElapsedMs, ui->spinBoxTimeout->value());
+            if (!responseValid || responseTimedOut) {
+                PacketInfo lostPacket;
+                if (hasPending && session->statistics.markOldestPendingLost(pendingElapsedMs, &lostPacket)) {
+                    session->awaitingResponse = false;
+                    if (session->testRunning) session->statisticsValid = false;
+                    const QString reason = !responseValid
+                        ? QStringLiteral("invalid/sticky response")
+                        : QStringLiteral("response exceeded Timeout %1 ms").arg(ui->spinBoxTimeout->value());
+                    appendLog(LogLevel::Error, QStringLiteral("[Port %1] #%2 %3 (%4)")
+                                                  .arg(session->port).arg(lostPacket.id).arg(reason)
+                                                  .arg(payloadToDisplay(data, lostPacket.txFormat, false)), pendingElapsedMs);
+                    if (session->oneShotRunning && !session->oneShotCommands.isEmpty()) {
+                        scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
+                    } else if (session->testRunning && !session->finishingAfterLimit) {
+                        scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
+                    }
+                } else {
+                    if (session->testRunning) session->statisticsValid = false;
+                    appendLog(LogLevel::Error, QStringLiteral("[Port %1] Unmatched or late response %2").arg(session->port).arg(payloadToDisplay(data, QString(), false)));
+                }
+            } else if (session->statistics.recordReceive(data, &packet)) {
                 session->awaitingResponse = false;
                 if (session->oneShotRunning) {
                     if (session->oneShotCommands.isEmpty()) {
@@ -1019,7 +1042,9 @@ void MainWindow::connectTcpPorts()
             if (!session || session->worker != worker) return;
             if (!session->testRunning && !session->oneShotRunning) return;
             if (session->testRunning) session->statisticsValid = false;
-            session->statistics.markTimeouts(ui->spinBoxTimeout->value());
+            qint64 elapsedMs = 0;
+            session->statistics.oldestPendingElapsed(&elapsedMs);
+            session->statistics.markOldestPendingLost(elapsedMs);
             session->awaitingResponse = false;
             if (session->oneShotRunning) {
                 if (session->oneShotCommands.isEmpty()) session->oneShotRunning = false;
@@ -1184,12 +1209,35 @@ void MainWindow::connectSerialPorts()
             }
             updateSerialConnectionState();
         });
-        QObject::connect(worker, &SerialClientWorker::signalDataReceived, this, [this, sessionPortName, worker](const QByteArray &data) {
+        QObject::connect(worker, &SerialClientWorker::signalDataReceived, this, [this, sessionPortName, worker](const QByteArray &data, bool responseValid) {
             SerialPortSession *session = m_serialSessions.value(sessionPortName, nullptr);
             if (!session || session->worker != worker) return;
             if (!session->testRunning && !session->oneShotRunning) return;
             PacketInfo packet;
-            if (session->statistics.recordReceive(data, &packet)) {
+            qint64 pendingElapsedMs = 0;
+            const bool hasPending = session->statistics.oldestPendingElapsed(&pendingElapsedMs);
+            const bool responseTimedOut = hasPending && responseReachedTimeout(pendingElapsedMs, ui->spinBoxTimeout->value());
+            if (!responseValid || responseTimedOut) {
+                PacketInfo lostPacket;
+                if (hasPending && session->statistics.markOldestPendingLost(pendingElapsedMs, &lostPacket)) {
+                    session->awaitingResponse = false;
+                    if (session->testRunning) session->statisticsValid = false;
+                    const QString reason = !responseValid
+                        ? QStringLiteral("invalid/sticky response")
+                        : QStringLiteral("response exceeded Timeout %1 ms").arg(ui->spinBoxTimeout->value());
+                    appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 %3 (%4)")
+                                                  .arg(session->portName).arg(lostPacket.id).arg(reason)
+                                                  .arg(payloadToDisplay(data, lostPacket.txFormat, false)), pendingElapsedMs);
+                    if (session->oneShotRunning && !session->oneShotCommands.isEmpty()) {
+                        scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
+                    } else if (session->testRunning && !session->finishingAfterLimit) {
+                        scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
+                    }
+                } else {
+                    if (session->testRunning) session->statisticsValid = false;
+                    appendLog(LogLevel::Error, QStringLiteral("[%1] Unmatched or late response %2").arg(session->portName).arg(payloadToDisplay(data, QString(), false)));
+                }
+            } else if (session->statistics.recordReceive(data, &packet)) {
                 session->awaitingResponse = false;
                 if (session->oneShotRunning) {
                     if (session->oneShotCommands.isEmpty()) {
@@ -1236,7 +1284,9 @@ void MainWindow::connectSerialPorts()
             if (!session || session->worker != worker) return;
             if (!session->testRunning && !session->oneShotRunning) return;
             if (session->testRunning) session->statisticsValid = false;
-            session->statistics.markTimeouts(ui->spinBoxTimeout->value());
+            qint64 elapsedMs = 0;
+            session->statistics.oldestPendingElapsed(&elapsedMs);
+            session->statistics.markOldestPendingLost(elapsedMs);
             session->awaitingResponse = false;
             if (session->oneShotRunning) {
                 if (session->oneShotCommands.isEmpty()) session->oneShotRunning = false;

@@ -73,6 +73,39 @@ bool StatisticsManager::recordReceive(const QByteArray &payload, PacketInfo *upd
     return false;
 }
 
+bool StatisticsManager::oldestPendingElapsed(qint64 *elapsedMs) const
+{
+    if (!elapsedMs) return false;
+    for (const quint64 id : m_pendingIds) {
+        const int index = m_indexById.value(id, -1);
+        if (index < 0 || index >= m_packets.size() || m_packets[index].status != PacketInfo::Status::Pending) continue;
+        *elapsedMs = m_timer.elapsed() - m_packets[index].sentTickMs;
+        return true;
+    }
+    return false;
+}
+
+bool StatisticsManager::markOldestPendingLost(qint64 elapsedMs, PacketInfo *updatedPacket)
+{
+    while (!m_pendingIds.isEmpty()) {
+        const quint64 id = m_pendingIds.dequeue();
+        const int index = m_indexById.value(id, -1);
+        if (index < 0 || index >= m_packets.size() || m_packets[index].status != PacketInfo::Status::Pending) continue;
+
+        PacketInfo packet = m_packets.at(index);
+        packet.status = PacketInfo::Status::Timeout;
+        packet.elapsedMs = elapsedMs;
+        if (updatedPacket) *updatedPacket = packet;
+
+        ++m_lostPackets;
+        m_packets.removeAt(index);
+        rebuildPendingQueue();
+        return true;
+    }
+
+    return false;
+}
+
 QVector<PacketInfo> StatisticsManager::markTimeouts(qint64 timeoutMs)
 {
     QVector<PacketInfo> timedOut;

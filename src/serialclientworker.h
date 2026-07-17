@@ -59,7 +59,7 @@ public Q_SLOTS:
 Q_SIGNALS:
     void signalConnected();
     void signalDisconnected();
-    void signalDataReceived(const QByteArray &data);
+    void signalDataReceived(const QByteArray &data, bool responseValid);
     void signalErrorOccurred(const QString &message);
     void signalBytesWritten(qint64 bytes);
     void signalDataSent(const QByteArray &data, const QString &format);

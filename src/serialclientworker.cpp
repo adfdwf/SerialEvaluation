@@ -253,18 +253,24 @@ void SerialClientWorker::ioLoop()
                 if (waitingForResponse && expectedResponseBytes > 0 && responseBuffer.size() >= expectedResponseBytes) {
                     const QByteArray completeResponse = responseBuffer.left(expectedResponseBytes);
                     const auto responseCompletedAt = std::chrono::steady_clock::now();
+                    bool responseValid = true;
                     const int extraBytes = responseBuffer.size() - expectedResponseBytes;
                     if (extraBytes > 0) {
                         reportError(QStringLiteral("Serial sticky packet detected; %1 extra bytes discarded").arg(extraBytes));
+                        responseValid = false;
                     }
                     responseBuffer.clear();
                     {
                         std::lock_guard<std::mutex> lock(m_statsMutex);
-                        if (!m_statistics.recordReceive(completeResponse)) m_statisticsValid = false;
+                        if (responseValid) {
+                            if (!m_statistics.recordReceive(completeResponse)) m_statisticsValid = false;
+                        } else {
+                            m_statistics.markOldestPendingLost(responseTimer.elapsed());
+                        }
                     }
                     waitingForResponse = false;
                     armSendInterval(responseCompletedAt);
-                    emit signalDataReceived(completeResponse);
+                    emit signalDataReceived(completeResponse, responseValid);
                 }
             }
             if (waitingForResponse && responseTimer.elapsed() >= m_receiveTimeoutMs.load(std::memory_order_acquire)) {
