@@ -42,6 +42,7 @@ public:
 
     /** @brief Set the receive wait budget used by the I/O polling loop. */
     void setReceiveTimeout(int timeoutMs);
+    void setSendInterval(int intervalMs);
     /** @brief 清空本端口线程的统计数据。 */
     void resetStatistics();
     /** @brief 结束本轮统计并返回最终快照。 */
@@ -61,6 +62,7 @@ Q_SIGNALS:
     void signalDataReceived(const QByteArray &data);
     void signalErrorOccurred(const QString &message);
     void signalBytesWritten(qint64 bytes);
+    void signalDataSent(const QByteArray &data, const QString &format);
     void signalReceiveTimeout();
 
 private:
@@ -78,6 +80,7 @@ private:
     std::atomic_bool m_stopping{false};
     std::atomic_bool m_connected{false};
     std::atomic_int m_receiveTimeoutMs{300};
+    std::atomic_int m_sendIntervalMs{0};
     mutable std::mutex m_queueMutex;
     std::condition_variable m_queueCondition;
     std::deque<Task> m_tasks;

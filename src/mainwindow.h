@@ -145,6 +145,8 @@ private Q_SLOTS:
     void slotHexModeToggled();
     /** @brief 动态添加 TCP 端口。 */
     void slotAddTcpPort();
+    /** @brief 批量添加 TCP 端口。 */
+    void slotBatchAddTcpPorts();
     /** @brief 删除选中的 TCP 端口。 */
     void slotRemoveTcpPort();
     /** @brief 对选中的 TCP 端口执行 Send All。 */
@@ -308,12 +310,18 @@ private:
     void checkSerialTimeouts();
     /** @brief 更新单个串口标签页的统计卡片。 */
     void updateSerialSessionStats(SerialPortSession *session);
+    /** @brief 更新单个 TCP 端口标签页的实时统计卡片。 */
+    void updateTcpSessionStats(TcpPortSession *session);
     /** @brief 刷新每个串口标签页中的可用端口候选项。 */
     void refreshSerialPortChoices();
     /** @brief 将一条事件直接追加到对应端口的本地日志文件。 */
     void appendLogFile(const QString &portTag, const QString &line);
     /** @brief 将端口日志事件显示到对应的独立日志区域。 */
     void appendPortLog(const QString &portTag, const QString &line, const QString &color);
+    /** @brief 将当前 TCP 端口的全部界面参数写入该端口日志。 */
+    void logTcpSessionParameters(const TcpPortSession *session, const QString &testType);
+    /** @brief 将当前串口的全部界面参数写入该串口日志。 */
+    void logSerialSessionParameters(const SerialPortSession *session, const QString &testType);
 
 private:
     Ui::MainWindow *ui = nullptr;                         ///< Qt Designer 生成的控件集合。
@@ -335,6 +343,7 @@ private:
     QTableWidget *m_tcpPortTable = nullptr;                 ///< TCP 端口状态表格。
     QTabWidget *m_tcpCommandTabs = nullptr;                 ///< TCP 端口命令标签页。
     QPushButton *m_tcpAddPortButton = nullptr;              ///< TCP 添加端口按钮。
+    QPushButton *m_tcpBatchAddPortButton = nullptr;         ///< TCP 批量添加端口按钮。
     QPushButton *m_tcpRemovePortButton = nullptr;           ///< TCP 删除端口按钮。
     QPushButton *m_tcpSendAllButton = nullptr;              ///< TCP 全局 Send All 按钮。
     QHash<QString, SerialPortSession *> m_serialSessions;  ///< 串口名到会话对象的映射。

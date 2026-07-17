@@ -12,8 +12,8 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC_SEARCH_PATHS ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Network SerialPort)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Network SerialPort)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Network SerialPort Test)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Network SerialPort Test)
 
 set(PROJECT_SOURCES
     src/resources.rc
@@ -25,6 +25,8 @@ set(PROJECT_SOURCES
     src/icommunicationinterface.h
     src/protocolframedecoder.h
     src/protocolframedecoder.cpp
+    src/tcpportparser.h
+    src/tcpportparser.cpp
     src/tcpclientworker.h
     src/tcpclientworker.cpp
     src/serialclientworker.h
@@ -76,4 +78,14 @@ if(BUILD_TESTING)
     target_include_directories(ProtocolFrameDecoderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(ProtocolFrameDecoderTest PRIVATE Qt${QT_VERSION_MAJOR}::Core)
     add_test(NAME ProtocolFrameDecoderTest COMMAND ProtocolFrameDecoderTest)
+
+    add_executable(TcpPortParserTest
+        tests/tcpportparser_test.cpp
+        src/tcpportparser.h
+        src/tcpportparser.cpp
+    )
+    target_include_directories(TcpPortParserTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(TcpPortParserTest PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME TcpPortParserTest COMMAND TcpPortParserTest)
+
 endif()
