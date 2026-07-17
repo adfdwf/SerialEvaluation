@@ -47,8 +47,8 @@ bool TcpClientWorker::finalStatisticsSnapshot(StatisticsSnapshot *snapshot)
 {
     try {
         std::lock_guard<std::mutex> lock(m_statsMutex);
-        if (!m_statistics.markAllPendingLost().isEmpty()) m_statisticsValid = false;
-        if (!m_statisticsValid || !snapshot) return false;
+        if (!snapshot) return false;
+        m_statistics.markAllPendingLost();
         *snapshot = m_statistics.snapshot();
         return true;
     } catch (const std::bad_alloc &) {

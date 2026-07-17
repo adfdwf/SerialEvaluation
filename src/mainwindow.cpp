@@ -95,7 +95,7 @@ void MainWindow::setupUiLogic()
     ui->spinBoxInterval->setValue(1000);
     ui->spinBoxSendCount->setRange(0, 100000000);
     ui->spinBoxSendCount->setValue(0);
-    ui->spinBoxTimeout->setRange(100, 600000);
+    ui->spinBoxTimeout->setRange(1, 600000);
     ui->spinBoxTimeout->setValue(300);
 
     ui->comboBoxMode->addItems({QStringLiteral("TCP Network"), QStringLiteral("Serial Port")});
@@ -1429,7 +1429,7 @@ void MainWindow::stopSerialTest(bool manualStop)
         session->testRunning = false;
         session->finishingAfterLimit = false;
         const QVector<PacketInfo> lost = session->statistics.markAllPendingLost();
-        if (!lost.isEmpty()) session->statisticsValid = false;
+        if (!lost.isEmpty() && !manualStop) session->statisticsValid = false;
         for (const PacketInfo &packet : lost) appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 lost").arg(session->portName).arg(packet.id));
     }
     m_testRunning = false;
@@ -1437,13 +1437,16 @@ void MainWindow::stopSerialTest(bool manualStop)
     m_serialFinalStats.clear();
     for (SerialPortSession *session : m_serialSessions) {
         StatisticsSnapshot snap;
-        const bool hasFinalStats = session->statisticsValid && session->worker && session->worker->finalStatisticsSnapshot(&snap);
+        const bool hasFinalStats = session->worker && session->worker->finalStatisticsSnapshot(&snap);
         if (hasFinalStats) {
             m_serialFinalStats.insert(session->portName, snap);
             appendLog(LogLevel::Info, QStringLiteral("[%1] Final P50=%2 ms P90=%3 ms P95=%4 ms P99=%5 ms Success=%6/%7 Rate=%8% Average=%9 ms Max=%10 ms Min=%11 ms")
                                           .arg(session->portName).arg(snap.p50Ms, 0, 'f', 0).arg(snap.p90Ms, 0, 'f', 0)
                                           .arg(snap.p95Ms, 0, 'f', 0).arg(snap.p99Ms, 0, 'f', 0).arg(snap.successReceived)
                                           .arg(snap.totalSent).arg(snap.successRate, 0, 'f', 2).arg(snap.averageElapsedMs, 0, 'f', 3).arg(snap.maxElapsedMs).arg(snap.minElapsedMs));
+            if (!session->statisticsValid) {
+                appendLog(LogLevel::Error, QStringLiteral("[%1] Final statistics include communication errors").arg(session->portName));
+            }
         } else {
             appendLog(LogLevel::Error, QStringLiteral("[%1] Statistics unavailable because the test encountered an error").arg(session->portName));
         }
@@ -1666,20 +1669,23 @@ void MainWindow::stopTcpTest(bool manualStop)
         session->testRunning = false;
         session->finishingAfterLimit = false;
         const QVector<PacketInfo> lost = session->statistics.markAllPendingLost();
-        if (!lost.isEmpty()) session->statisticsValid = false;
+        if (!lost.isEmpty() && !manualStop) session->statisticsValid = false;
     }
     m_testRunning = false;
     m_timeoutTimer->stop();
     m_tcpFinalStats.clear();
     for (TcpPortSession *session : m_tcpSessions) {
         StatisticsSnapshot snap;
-        const bool hasFinalStats = session->statisticsValid && session->worker && session->worker->finalStatisticsSnapshot(&snap);
+        const bool hasFinalStats = session->worker && session->worker->finalStatisticsSnapshot(&snap);
         if (hasFinalStats) {
             m_tcpFinalStats.insert(session->port, snap);
             appendLog(LogLevel::Info, QStringLiteral("[Port %1] Final P50=%2 ms P90=%3 ms P95=%4 ms P99=%5 ms Success=%6/%7 Rate=%8% Average=%9 ms Max=%10 ms Min=%11 ms")
                                          .arg(session->port).arg(snap.p50Ms, 0, 'f', 0).arg(snap.p90Ms, 0, 'f', 0)
                                          .arg(snap.p95Ms, 0, 'f', 0).arg(snap.p99Ms, 0, 'f', 0).arg(snap.successReceived)
                                          .arg(snap.totalSent).arg(snap.successRate, 0, 'f', 2).arg(snap.averageElapsedMs, 0, 'f', 3).arg(snap.maxElapsedMs).arg(snap.minElapsedMs));
+            if (!session->statisticsValid) {
+                appendLog(LogLevel::Error, QStringLiteral("[Port %1] Final statistics include communication errors").arg(session->port));
+            }
         } else {
             appendLog(LogLevel::Error, QStringLiteral("[Port %1] Statistics unavailable because the test encountered an error").arg(session->port));
         }
