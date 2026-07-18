@@ -280,48 +280,41 @@ void TcpClientWorker::ioLoop()
                         rawResponseBuffer.append(receivedChunk);
                     }
                     if (rawResponseBuffer.size() >= expectedResponseBytes) {
-                        const QByteArray completeResponse = rawResponseBuffer.left(expectedResponseBytes);
+                        const QByteArray responseData = rawResponseBuffer;
                         const auto responseCompletedAt = std::chrono::steady_clock::now();
-                        bool responseValid = true;
-                        const int extraBytes = rawResponseBuffer.size() - expectedResponseBytes;
-                        if (extraBytes > 0) {
-                            reportError(QStringLiteral("TCP sticky packet detected; %1 extra bytes discarded").arg(extraBytes));
-                            responseValid = false;
-                        }
+                        const bool responseValid = responseData.size() == expectedResponseBytes;
                         rawResponseBuffer.clear();
                         {
                             std::lock_guard<std::mutex> lock(m_statsMutex);
                             if (responseValid) {
-                                if (!m_statistics.recordReceive(completeResponse)) m_statisticsValid = false;
+                                if (!m_statistics.recordReceive(responseData)) m_statisticsValid = false;
                             } else {
                                 m_statistics.markOldestPendingLost(responseTimer.elapsed());
                             }
                         }
                         waitingForResponse = false;
                         armSendInterval(responseCompletedAt);
-                        emit signalDataReceived(completeResponse, responseValid);
+                        emit signalDataReceived(responseData, responseValid);
                     }
                 } else {
                     const ProtocolFrameDecoder::DecodeResult result = decoder.appendData(receivedChunk);
-                    bool responseValid = result.errors.isEmpty();
                     for (const QString &error : result.errors) reportError(error);
-                    if (result.frames.size() > 1) {
-                        reportError(QStringLiteral("TCP sticky packet detected; split into %1 frames").arg(result.frames.size()));
-                        responseValid = false;
-                    }
-                    for (const QByteArray &frame : result.frames) {
+                    if (!result.frames.isEmpty()) {
+                        QByteArray responseData;
+                        for (const QByteArray &frame : result.frames) responseData.append(frame);
+                        const bool responseValid = result.errors.isEmpty() && result.frames.size() == 1;
                         const auto responseCompletedAt = std::chrono::steady_clock::now();
                         {
                             std::lock_guard<std::mutex> lock(m_statsMutex);
                             if (responseValid) {
-                                if (!m_statistics.recordReceive(frame)) m_statisticsValid = false;
+                                if (!m_statistics.recordReceive(responseData)) m_statisticsValid = false;
                             } else {
                                 m_statistics.markOldestPendingLost(responseTimer.elapsed());
                             }
                         }
                         waitingForResponse = false;
                         armSendInterval(responseCompletedAt);
-                        emit signalDataReceived(frame, responseValid);
+                        emit signalDataReceived(responseData, responseValid);
                     }
                 }
             }
