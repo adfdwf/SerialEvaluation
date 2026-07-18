@@ -25,6 +25,8 @@ set(PROJECT_SOURCES
     src/icommunicationinterface.h
     src/protocolframedecoder.h
     src/protocolframedecoder.cpp
+    src/responsehandling.h
+    src/responsehandling.cpp
     src/tcpportparser.h
     src/tcpportparser.cpp
     src/tcpclientworker.h
@@ -95,5 +97,17 @@ if(BUILD_TESTING)
     target_include_directories(ResponseTimingTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(ResponseTimingTest PRIVATE Qt${QT_VERSION_MAJOR}::Core)
     add_test(NAME ResponseTimingTest COMMAND ResponseTimingTest)
+
+    add_executable(ResponseHandlingTest
+        tests/responsehandling_test.cpp
+        src/responsehandling.h
+        src/responsehandling.cpp
+        src/protocolframedecoder.h
+        src/protocolframedecoder.cpp
+        src/namespace.h
+    )
+    target_include_directories(ResponseHandlingTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ResponseHandlingTest PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME ResponseHandlingTest COMMAND ResponseHandlingTest)
 
 endif()

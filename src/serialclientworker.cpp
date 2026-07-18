@@ -1,5 +1,7 @@
 #include "serialclientworker.h"
 
+#include "responsehandling.h"
+
 #include <QElapsedTimer>
 #include <algorithm>
 #include <chrono>
@@ -258,27 +260,24 @@ void SerialClientWorker::ioLoop()
                         responseBuffer.append(data);
                     }
                 }
-                if (waitingForResponse && expectedResponseBytes > 0 && responseBuffer.size() >= expectedResponseBytes) {
-                    const QByteArray completeResponse = responseBuffer.left(expectedResponseBytes);
-                    const QByteArray responseData = responseBuffer;
-                    const auto responseCompletedAt = std::chrono::steady_clock::now();
-                    bool responseValid = true;
-                    const int extraBytes = responseBuffer.size() - expectedResponseBytes;
-                    if (extraBytes > 0) {
-                        responseValid = false;
-                    }
-                    responseBuffer.clear();
-                    {
-                        std::lock_guard<std::mutex> lock(m_statsMutex);
-                        if (responseValid) {
-                            if (!m_statistics.recordReceive(completeResponse)) m_statisticsValid = false;
-                        } else {
-                            m_statistics.markOldestPendingLost(responseTimer.elapsed());
+                if (waitingForResponse) {
+                    const ResponseBatch batch = collectLengthResponse(responseBuffer, expectedResponseBytes);
+                    if (!batch.events.isEmpty()) {
+                        const ResponseEvent response = batch.events.constFirst();
+                        const auto responseCompletedAt = std::chrono::steady_clock::now();
+                        responseBuffer.clear();
+                        {
+                            std::lock_guard<std::mutex> lock(m_statsMutex);
+                            if (response.valid) {
+                                if (!m_statistics.recordReceive(response.data)) m_statisticsValid = false;
+                            } else {
+                                m_statistics.markOldestPendingLost(responseTimer.elapsed());
+                            }
                         }
+                        waitingForResponse = false;
+                        armSendInterval(responseCompletedAt);
+                        emit signalDataReceived(response.data, response.valid);
                     }
-                    waitingForResponse = false;
-                    armSendInterval(responseCompletedAt);
-                    emit signalDataReceived(responseData, responseValid);
                 }
             }
             if (waitingForResponse && responseTimer.elapsed() >= m_receiveTimeoutMs.load(std::memory_order_acquire)) {

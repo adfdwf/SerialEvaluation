@@ -1,6 +1,7 @@
 #include "tcpclientworker.h"
 
 #include "protocolframedecoder.h"
+#include "responsehandling.h"
 
 #include <QElapsedTimer>
 #include <QTcpSocket>
@@ -279,42 +280,40 @@ void TcpClientWorker::ioLoop()
                     } else {
                         rawResponseBuffer.append(receivedChunk);
                     }
-                    if (rawResponseBuffer.size() >= expectedResponseBytes) {
-                        const QByteArray responseData = rawResponseBuffer;
+                    const ResponseBatch batch = collectLengthResponse(rawResponseBuffer, expectedResponseBytes);
+                    if (!batch.events.isEmpty()) {
+                        const ResponseEvent response = batch.events.constFirst();
                         const auto responseCompletedAt = std::chrono::steady_clock::now();
-                        const bool responseValid = responseData.size() == expectedResponseBytes;
                         rawResponseBuffer.clear();
                         {
                             std::lock_guard<std::mutex> lock(m_statsMutex);
-                            if (responseValid) {
-                                if (!m_statistics.recordReceive(responseData)) m_statisticsValid = false;
+                            if (response.valid) {
+                                if (!m_statistics.recordReceive(response.data)) m_statisticsValid = false;
                             } else {
                                 m_statistics.markOldestPendingLost(responseTimer.elapsed());
                             }
                         }
                         waitingForResponse = false;
                         armSendInterval(responseCompletedAt);
-                        emit signalDataReceived(responseData, responseValid);
+                        emit signalDataReceived(response.data, response.valid);
                     }
                 } else {
-                    const ProtocolFrameDecoder::DecodeResult result = decoder.appendData(receivedChunk);
-                    for (const QString &error : result.errors) reportError(error);
-                    if (!result.frames.isEmpty()) {
-                        QByteArray responseData;
-                        for (const QByteArray &frame : result.frames) responseData.append(frame);
-                        const bool responseValid = result.errors.isEmpty() && result.frames.size() == 1;
+                    const ResponseBatch batch = collectProtocolResponse(decoder.appendData(receivedChunk));
+                    for (const QString &error : batch.errors) reportError(error);
+                    if (!batch.events.isEmpty()) {
+                        const ResponseEvent response = batch.events.constFirst();
                         const auto responseCompletedAt = std::chrono::steady_clock::now();
                         {
                             std::lock_guard<std::mutex> lock(m_statsMutex);
-                            if (responseValid) {
-                                if (!m_statistics.recordReceive(responseData)) m_statisticsValid = false;
+                            if (response.valid) {
+                                if (!m_statistics.recordReceive(response.data)) m_statisticsValid = false;
                             } else {
                                 m_statistics.markOldestPendingLost(responseTimer.elapsed());
                             }
                         }
                         waitingForResponse = false;
                         armSendInterval(responseCompletedAt);
-                        emit signalDataReceived(responseData, responseValid);
+                        emit signalDataReceived(response.data, response.valid);
                     }
                 }
             }

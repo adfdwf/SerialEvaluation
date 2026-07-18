@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "responsehandling.h"
 #include "responsetiming.h"
 #include "serialclientworker.h"
 #include "tcpclientworker.h"
@@ -1459,22 +1460,12 @@ void MainWindow::handleSerialAbnormalResponse(SerialPortSession *session, const 
 
     const QString prefix = QStringLiteral("[%1]").arg(session->portName);
     if (lost) {
-        if (reason == QStringLiteral("sticky response")) {
-            appendLog(LogLevel::Error,
-                      QStringLiteral("%1 #%2 sticky response: %3")
-                          .arg(prefix)
-                          .arg(lostPacket.id)
-                          .arg(payloadToDisplay(data, lostPacket.txFormat, false)),
-                      effectiveElapsedMs);
-        } else {
-            appendLog(LogLevel::Error,
-                      QStringLiteral("%1 #%2 %3%4")
-                          .arg(prefix)
-                          .arg(lostPacket.id)
-                          .arg(reason)
-                          .arg(data.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(payloadToDisplay(data, lostPacket.txFormat, false))),
-                      effectiveElapsedMs);
-        }
+        const ResponseLogEntry entry = formatPendingResponseError(prefix,
+                                                                  lostPacket.id,
+                                                                  reason,
+                                                                  data,
+                                                                  lostPacket.txFormat);
+        appendLog(LogLevel::Error, entry.message, effectiveElapsedMs);
     } else {
         appendLog(LogLevel::Error,
                   QStringLiteral("%1 %2%3")
@@ -1759,22 +1750,12 @@ void MainWindow::handleTcpAbnormalResponse(TcpPortSession *session, const QByteA
 
     const QString prefix = QStringLiteral("[Port %1]").arg(session->port);
     if (lost) {
-        if (reason == QStringLiteral("sticky response")) {
-            appendLog(LogLevel::Error,
-                      QStringLiteral("%1 #%2 sticky response: %3")
-                          .arg(prefix)
-                          .arg(lostPacket.id)
-                          .arg(payloadToDisplay(data, lostPacket.txFormat, false)),
-                      effectiveElapsedMs);
-        } else {
-            appendLog(LogLevel::Error,
-                      QStringLiteral("%1 #%2 %3%4")
-                          .arg(prefix)
-                          .arg(lostPacket.id)
-                          .arg(reason)
-                          .arg(data.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(payloadToDisplay(data, lostPacket.txFormat, false))),
-                      effectiveElapsedMs);
-        }
+        const ResponseLogEntry entry = formatPendingResponseError(prefix,
+                                                                  lostPacket.id,
+                                                                  reason,
+                                                                  data,
+                                                                  lostPacket.txFormat);
+        appendLog(LogLevel::Error, entry.message, effectiveElapsedMs);
     } else {
         appendLog(LogLevel::Error,
                   QStringLiteral("%1 %2%3")
