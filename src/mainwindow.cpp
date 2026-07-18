@@ -1800,6 +1800,7 @@ void MainWindow::startTcpTest()
         session->statisticsValid = true;
         session->oneShotCommands.clear();
         session->oneShotRunning = false;
+        session->awaitingResponse = false;
         session->nextOneShotDeadlineMs = 0;
         session->currentCommandIndex = 0;
         session->perCommandSendCount = QVector<int>(commands.size(), 0);
