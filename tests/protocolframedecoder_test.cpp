@@ -82,6 +82,15 @@ int main(int argc, char *argv[])
     passed &= expectFrames(responseDecoder.appendData(deviceResponse.left(3)), {}, "partial device response header");
     passed &= expectFrames(responseDecoder.appendData(deviceResponse.mid(3)), {deviceResponse}, "device response frame");
 
+    ProtocolFrameDecoder multiResponseDecoder;
+    const QByteArray firstResponse = QByteArray::fromHex("A00064810000000085");
+    const QByteArray secondResponse = QByteArray::fromHex("A00064810000000186");
+    const auto multiResponseResult = multiResponseDecoder.appendData(firstResponse + secondResponse);
+    passed &= multiResponseResult.errors.isEmpty();
+    passed &= expectFrames(multiResponseResult,
+                           QVector<QByteArray>({firstResponse, secondResponse}),
+                           "multiple device response frames preserve order");
+
     ProtocolFrameDecoder stickyDecoder;
     QByteArray stickyInput("NOISE", 5);
     stickyInput.append(payloadFrame);
