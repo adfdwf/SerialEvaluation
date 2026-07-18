@@ -978,7 +978,7 @@ void MainWindow::connectTcpPorts()
             const bool responseTimedOut = hasPending && responseReachedTimeout(pendingElapsedMs, ui->spinBoxTimeout->value());
             if (!responseValid || responseTimedOut) {
                 const QString reason = !responseValid
-                    ? QStringLiteral("invalid/sticky response")
+                    ? QStringLiteral("sticky response")
                     : QStringLiteral("response exceeded Timeout %1 ms").arg(ui->spinBoxTimeout->value());
                 handleTcpAbnormalResponse(session, data, reason, pendingElapsedMs);
             } else if (session->statistics.recordReceive(data, &packet)) {
@@ -1208,7 +1208,7 @@ void MainWindow::connectSerialPorts()
             const bool responseTimedOut = hasPending && responseReachedTimeout(pendingElapsedMs, ui->spinBoxTimeout->value());
             if (!responseValid || responseTimedOut) {
                 const QString reason = !responseValid
-                    ? QStringLiteral("invalid/sticky response")
+                    ? QStringLiteral("sticky response")
                     : QStringLiteral("response exceeded Timeout %1 ms").arg(ui->spinBoxTimeout->value());
                 handleSerialAbnormalResponse(session, data, reason, pendingElapsedMs);
             } else if (session->statistics.recordReceive(data, &packet)) {
@@ -1459,13 +1459,22 @@ void MainWindow::handleSerialAbnormalResponse(SerialPortSession *session, const 
 
     const QString prefix = QStringLiteral("[%1]").arg(session->portName);
     if (lost) {
-        appendLog(LogLevel::Error,
-                  QStringLiteral("%1 #%2 %3%4")
-                      .arg(prefix)
-                      .arg(lostPacket.id)
-                      .arg(reason)
-                      .arg(data.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(payloadToDisplay(data, lostPacket.txFormat, false))),
-                  effectiveElapsedMs);
+        if (reason == QStringLiteral("sticky response")) {
+            appendLog(LogLevel::Error,
+                      QStringLiteral("%1 #%2 sticky response: %3")
+                          .arg(prefix)
+                          .arg(lostPacket.id)
+                          .arg(payloadToDisplay(data, lostPacket.txFormat, false)),
+                      effectiveElapsedMs);
+        } else {
+            appendLog(LogLevel::Error,
+                      QStringLiteral("%1 #%2 %3%4")
+                          .arg(prefix)
+                          .arg(lostPacket.id)
+                          .arg(reason)
+                          .arg(data.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(payloadToDisplay(data, lostPacket.txFormat, false))),
+                      effectiveElapsedMs);
+        }
     } else {
         appendLog(LogLevel::Error,
                   QStringLiteral("%1 %2%3")
@@ -1750,13 +1759,22 @@ void MainWindow::handleTcpAbnormalResponse(TcpPortSession *session, const QByteA
 
     const QString prefix = QStringLiteral("[Port %1]").arg(session->port);
     if (lost) {
-        appendLog(LogLevel::Error,
-                  QStringLiteral("%1 #%2 %3%4")
-                      .arg(prefix)
-                      .arg(lostPacket.id)
-                      .arg(reason)
-                      .arg(data.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(payloadToDisplay(data, lostPacket.txFormat, false))),
-                  effectiveElapsedMs);
+        if (reason == QStringLiteral("sticky response")) {
+            appendLog(LogLevel::Error,
+                      QStringLiteral("%1 #%2 sticky response: %3")
+                          .arg(prefix)
+                          .arg(lostPacket.id)
+                          .arg(payloadToDisplay(data, lostPacket.txFormat, false)),
+                      effectiveElapsedMs);
+        } else {
+            appendLog(LogLevel::Error,
+                      QStringLiteral("%1 #%2 %3%4")
+                          .arg(prefix)
+                          .arg(lostPacket.id)
+                          .arg(reason)
+                          .arg(data.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(payloadToDisplay(data, lostPacket.txFormat, false))),
+                      effectiveElapsedMs);
+        }
     } else {
         appendLog(LogLevel::Error,
                   QStringLiteral("%1 %2%3")
