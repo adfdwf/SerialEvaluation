@@ -1528,7 +1528,14 @@ void MainWindow::startSerialTest()
     ui->pushButtonStop->setEnabled(true);
     ui->pushButtonConnect->setEnabled(false);
     ui->comboBoxMode->setEnabled(false);
-    if (m_serialPortBox) m_serialPortBox->setEnabled(false);
+    if (m_serialAddPortButton) m_serialAddPortButton->setEnabled(false);
+    if (m_serialRemovePortButton) m_serialRemovePortButton->setEnabled(false);
+    if (m_serialRefreshButton) m_serialRefreshButton->setEnabled(false);
+    if (m_serialSendAllButton) m_serialSendAllButton->setEnabled(false);
+    if (m_serialPortTable) m_serialPortTable->setEnabled(false);
+    for (SerialPortSession *session : m_serialSessions) {
+        if (session && session->commandPage) session->commandPage->setEnabled(false);
+    }
     m_timeoutTimer->start();
     appendLog(LogLevel::Info, QStringLiteral("Multi-serial test started: %1 ports, timeout %2 ms").arg(active).arg(ui->spinBoxTimeout->value()));
     for (SerialPortSession *session : m_serialSessions) if (session->testRunning) sendNextSerialPacket(session);
@@ -1569,7 +1576,14 @@ void MainWindow::stopSerialTest(bool manualStop)
     ui->pushButtonStart->setEnabled(true);
     ui->pushButtonStop->setEnabled(false);
     ui->comboBoxMode->setEnabled(true);
-    if (m_serialPortBox) m_serialPortBox->setEnabled(true);
+    if (m_serialAddPortButton) m_serialAddPortButton->setEnabled(true);
+    if (m_serialRemovePortButton) m_serialRemovePortButton->setEnabled(true);
+    if (m_serialRefreshButton) m_serialRefreshButton->setEnabled(true);
+    if (m_serialSendAllButton) m_serialSendAllButton->setEnabled(true);
+    if (m_serialPortTable) m_serialPortTable->setEnabled(true);
+    for (SerialPortSession *session : m_serialSessions) {
+        if (session && session->commandPage) session->commandPage->setEnabled(true);
+    }
     updateSerialConnectionState();
 }
 
@@ -1804,7 +1818,9 @@ void MainWindow::startTcpTest()
     m_tcpBatchAddPortButton->setEnabled(false);
     m_tcpRemovePortButton->setEnabled(false);
     m_tcpSendAllButton->setEnabled(false);
-    m_tcpCommandTabs->setEnabled(false);
+    for (TcpPortSession *session : m_tcpSessions) {
+        if (session && session->commandPage) session->commandPage->setEnabled(false);
+    }
     m_tcpPortTable->setEnabled(false);
     m_timeoutTimer->start();
     appendLog(LogLevel::Info, QStringLiteral("Multi-port test started: %1 ports, timeout %2 ms")
@@ -1849,7 +1865,9 @@ void MainWindow::stopTcpTest(bool manualStop)
     m_tcpBatchAddPortButton->setEnabled(true);
     m_tcpRemovePortButton->setEnabled(true);
     m_tcpSendAllButton->setEnabled(true);
-    m_tcpCommandTabs->setEnabled(true);
+    for (TcpPortSession *session : m_tcpSessions) {
+        if (session && session->commandPage) session->commandPage->setEnabled(true);
+    }
     m_tcpPortTable->setEnabled(true);
     updateTcpConnectionState();
 }
