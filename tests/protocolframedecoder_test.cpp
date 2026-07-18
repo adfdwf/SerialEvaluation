@@ -2,8 +2,8 @@
 
 #include "statisticsmanager.h"
 
-#include <QCoreApplication>
 #include <QDebug>
+#include <QtTest>
 
 /** 协议解码器单元测试所使用的命名空间。 */
 using Ciqtek::ProtocolFrameDecoder;
@@ -63,10 +63,13 @@ bool expectFrames(const ProtocolFrameDecoder::DecodeResult &result,
 
 } // namespace
 
-int main(int argc, char *argv[])
+class ProtocolFrameDecoderTest final : public QObject
 {
-    // 单元测试不需要 GUI，只创建 Qt 核心应用对象。
-    QCoreApplication app(argc, argv);
+    Q_OBJECT
+
+private Q_SLOTS:
+    void decodesExistingProtocolCases()
+    {
 
     bool passed = true;             // 汇总所有断言是否通过。
     ProtocolFrameDecoder decoder;   // 测试分片请求帧的解码器。
@@ -81,15 +84,6 @@ int main(int argc, char *argv[])
     ProtocolFrameDecoder responseDecoder;
     passed &= expectFrames(responseDecoder.appendData(deviceResponse.left(3)), {}, "partial device response header");
     passed &= expectFrames(responseDecoder.appendData(deviceResponse.mid(3)), {deviceResponse}, "device response frame");
-
-    ProtocolFrameDecoder multiResponseDecoder;
-    const QByteArray firstResponse = QByteArray::fromHex("A00064810000000085");
-    const QByteArray secondResponse = QByteArray::fromHex("A00064810000000186");
-    const auto multiResponseResult = multiResponseDecoder.appendData(firstResponse + secondResponse);
-    passed &= multiResponseResult.errors.isEmpty();
-    passed &= expectFrames(multiResponseResult,
-                           QVector<QByteArray>({firstResponse, secondResponse}),
-                           "multiple device response frames preserve order");
 
     ProtocolFrameDecoder stickyDecoder;
     QByteArray stickyInput("NOISE", 5);
@@ -173,11 +167,22 @@ int main(int argc, char *argv[])
     passed &= invalidResult.lostPackets == 2;
     passed &= invalidResult.totalReceivedBytes == 0;
 
-    if (!passed) {
-        qCritical() << "ProtocolFrameDecoder tests failed";
-        return 1;
+        QVERIFY(passed);
     }
 
-    qInfo() << "ProtocolFrameDecoder tests passed";
-    return 0;
-}
+    void preservesOrderForConcatenatedDeviceResponses()
+    {
+        ProtocolFrameDecoder decoder;
+        const QByteArray first = QByteArray::fromHex("A00064810000000085");
+        const QByteArray second = QByteArray::fromHex("A00064810000000186");
+
+        const auto result = decoder.appendData(first + second);
+
+        QCOMPARE(result.frames, QVector<QByteArray>({first, second}));
+        QVERIFY(result.errors.isEmpty());
+    }
+};
+
+QTEST_APPLESS_MAIN(ProtocolFrameDecoderTest)
+
+#include "protocolframedecoder_test.moc"

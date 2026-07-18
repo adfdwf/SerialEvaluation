@@ -76,7 +76,7 @@ if(BUILD_TESTING)
         src/namespace.h
     )
     target_include_directories(ProtocolFrameDecoderTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(ProtocolFrameDecoderTest PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+    target_link_libraries(ProtocolFrameDecoderTest PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME ProtocolFrameDecoderTest COMMAND ProtocolFrameDecoderTest)
 
     add_executable(TcpPortParserTest

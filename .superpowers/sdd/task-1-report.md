@@ -36,3 +36,20 @@ The build output also contained an existing environment warning that `pwsh.exe` 
 - Confirmed the expected frame vector is ordered `firstResponse, secondResponse`.
 - Confirmed `errors.isEmpty()` is asserted.
 - Confirmed no decoder production code or unrelated working-tree changes are included in this task's staged commit.
+
+## Review follow-up: Qt Test slot compliance
+
+The review correctly identified that the original hand-rolled `main` did not meet the brief's requirement for a Qt Test slot. The test executable now uses a `QObject` test class with `Q_OBJECT`, `private Q_SLOTS`, and `QTEST_APPLESS_MAIN`.
+
+`preservesOrderForConcatenatedDeviceResponses()` is the dedicated Qt Test slot and retains the required assertions:
+
+- `QCOMPARE(result.frames, QVector<QByteArray>({first, second}))`
+- `QVERIFY(result.errors.isEmpty())`
+
+`ProtocolFrameDecoderTest` now links `Qt::Test`; the pre-link build failed with `QtTest` unavailable for this target, and after adding that dependency the focused build and CTest command passed (1/1 tests, 0 failures). The build emitted the pre-existing `pwsh.exe` environment warning, but its exit code was zero and CTest passed.
+
+### Follow-up self-review
+
+- Confirmed the response-order case is a real Qt Test private slot, not manual boolean aggregation.
+- Confirmed the test runner is supplied by `QTEST_APPLESS_MAIN`.
+- Confirmed the CMake target links the Qt Test module required for the slot and runner.
