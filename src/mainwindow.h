@@ -195,16 +195,23 @@ private:
     QList<CommandItem> collectCommands(QTableWidget *table) const;
     /** @brief 检查命令列表非空且所有命令合法。 */
     bool validateCommands(const QList<CommandItem> &commands);
-    /** @brief 并发连接全部 TCP 端口。 */
+    /** @brief 返回当前选中的 TCP 端口会话。 */
+    QVector<TcpPortSession *> selectedTcpSessions() const;
+    /** @brief 返回当前选中的串口会话。 */
+    QVector<SerialPortSession *> selectedSerialSessions() const;
+    /** @brief 根据当前模式、选择和会话状态刷新批量按钮。 */
+    void updateBatchActionState();
+    /** @brief 并发连接选中的 TCP 端口。 */
     void connectTcpPorts();
-    /** @brief 断开全部 TCP 端口。 */
+    /** @brief 断开选中的 TCP 端口。 */
     void disconnectTcpPorts();
     /** @brief 停止并释放全部 TCP worker。 */
+    void destroyTcpWorker(TcpPortSession *session);
     void destroyTcpWorkers();
-    /** @brief 启动全部 TCP 会话的连续测试。 */
+    /** @brief 启动选中 TCP 会话的连续测试。 */
     void startTcpTest();
     /** @brief 停止 TCP 连续测试并生成报告。 */
-    void stopTcpTest(bool manualStop);
+    void stopTcpTest(bool manualStop, bool selectedOnly = true);
     /** @brief 将一个 TCP 会话的全部命令排入单次发送队列。 */
     void sendAllTcpPort(TcpPortSession *session);
     /** @brief 发送 TCP 单次队列中的下一条命令。 */
@@ -238,9 +245,9 @@ private:
     void removeSerialCommand(SerialPortSession *session);
     /** @brief 从串口会话命令表收集命令。 */
     QList<CommandItem> collectSerialCommands(const SerialPortSession *session) const;
-    /** @brief 并发打开全部串口。 */
+    /** @brief 并发打开选中的串口。 */
     void connectSerialPorts();
-    /** @brief 安全关闭全部串口。 */
+    /** @brief 安全关闭选中的串口。 */
     void disconnectSerialPorts();
     /** @brief 关闭一个串口 worker 的线程和设备。 */
     void destroySerialWorker(SerialPortSession *session);
@@ -258,10 +265,10 @@ private:
     void sendNextOneShotSerialPacket(SerialPortSession *session);
     /** @brief 安排串口单次队列的下一条命令。 */
     void scheduleNextOneShotSerialPacket(SerialPortSession *session, int intervalMs);
-    /** @brief 启动全部已连接串口的连续测试。 */
+    /** @brief 启动选中且已连接串口的连续测试。 */
     void startSerialTest();
     /** @brief 停止串口连续测试并生成报告。 */
-    void stopSerialTest(bool manualStop);
+    void stopSerialTest(bool manualStop, bool selectedOnly = true);
     /** @brief 发送一个串口连续测试周期的下一条命令。 */
     void sendNextSerialPacket(SerialPortSession *session);
     /** @brief 安排串口连续测试的下一次发送。 */

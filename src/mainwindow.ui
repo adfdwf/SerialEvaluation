@@ -218,14 +218,14 @@
          <item>
           <widget class="QPushButton" name="pushButtonConnect">
            <property name="text">
-            <string>Connect</string>
+            <string>Connect Selected</string>
            </property>
           </widget>
          </item>
          <item>
           <widget class="QPushButton" name="pushButtonDisconnect">
            <property name="text">
-            <string>Disconnect</string>
+            <string>Disconnect Selected</string>
            </property>
           </widget>
          </item>
@@ -277,14 +277,14 @@
        <item>
         <widget class="QPushButton" name="pushButtonStart">
          <property name="text">
-          <string>Start</string>
+          <string>Start Selected</string>
          </property>
         </widget>
        </item>
        <item>
         <widget class="QPushButton" name="pushButtonStop">
          <property name="text">
-          <string>Stop</string>
+          <string>Stop Selected</string>
          </property>
         </widget>
        </item>

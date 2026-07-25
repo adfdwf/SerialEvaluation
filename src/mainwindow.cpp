@@ -69,8 +69,8 @@ MainWindow::MainWindow(QWidget *parent)
 /** 停止测试、关闭所有 worker、删除会话对象并释放 UI。 */
 MainWindow::~MainWindow()
 {
-    stopTcpTest(true);
-    stopSerialTest(true);
+    stopTcpTest(true, false);
+    stopSerialTest(true, false);
     destroyTcpWorkers();
     destroySerialWorkers();
     qDeleteAll(m_tcpSessions);
@@ -118,6 +118,10 @@ void MainWindow::setupUiLogic()
     QObject::connect(m_serialHotplugTimer, &QTimer::timeout, this, &MainWindow::slotRefreshSerialPorts);
     m_serialHotplugTimer->start();
 
+    ui->pushButtonConnect->setText(QStringLiteral("Connect Selected"));
+    ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect Selected"));
+    ui->pushButtonStart->setText(QStringLiteral("Start Selected"));
+    ui->pushButtonStop->setText(QStringLiteral("Stop Selected"));
     ui->pushButtonStop->setEnabled(false);
     // 日志只写入本地文件，不在界面中显示，也不向 QTextEdit 追加内容。
 
@@ -153,6 +157,7 @@ void MainWindow::setupUiLogic()
             if (session->worker) session->worker->setSendInterval(intervalMs);
         }
     });
+    updateBatchActionState();
 }
 
 /** 配置旧版单串口命令表的列、选择方式并创建第一条命令。 */
@@ -276,9 +281,9 @@ void MainWindow::applyIndustrialTheme()
 void MainWindow::slotModeChanged(int index)
 {
     const bool serialMode = index == 1;
-    stopTcpTest(true);
+    stopTcpTest(true, false);
     destroyTcpWorkers();
-    stopSerialTest(true);
+    stopSerialTest(true, false);
     destroySerialWorkers();
     ui->widgetTcpConfig->setVisible(!serialMode);
     ui->widgetSerialConfig->setVisible(false);
@@ -292,12 +297,12 @@ void MainWindow::slotModeChanged(int index)
     ui->spinBoxPort->setVisible(false);
     if (auto *portLabel = ui->groupBoxConfig->findChild<QLabel *>(QStringLiteral("labelPort"))) portLabel->setVisible(false);
     if (serialMode) {
-        ui->pushButtonConnect->setText(QStringLiteral("Connect All"));
-        ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect All"));
+        ui->pushButtonConnect->setText(QStringLiteral("Connect Selected"));
+        ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect Selected"));
         updateSerialConnectionState();
     } else {
-        ui->pushButtonConnect->setText(QStringLiteral("Connect All"));
-        ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect All"));
+        ui->pushButtonConnect->setText(QStringLiteral("Connect Selected"));
+        ui->pushButtonDisconnect->setText(QStringLiteral("Disconnect Selected"));
         updateTcpConnectionState();
     }
 }
@@ -316,7 +321,7 @@ void MainWindow::setupTcpPortUi()
     m_tcpAddPortButton = new QPushButton(QStringLiteral("+ Add Port"), portBox);
     m_tcpBatchAddPortButton = new QPushButton(QStringLiteral("Batch Add"), portBox);
     m_tcpRemovePortButton = new QPushButton(QStringLiteral("- Remove Port"), portBox);
-    m_tcpSendAllButton = new QPushButton(QStringLiteral("Send All Ports"), portBox);
+    m_tcpSendAllButton = new QPushButton(QStringLiteral("Send Selected Ports"), portBox);
     toolbar->addWidget(m_tcpAddPortButton);
     toolbar->addWidget(m_tcpBatchAddPortButton);
     toolbar->addWidget(m_tcpRemovePortButton);
@@ -328,12 +333,13 @@ void MainWindow::setupTcpPortUi()
     m_tcpPortTable->setColumnCount(3);
     m_tcpPortTable->setHorizontalHeaderLabels({QStringLiteral("Port"), QStringLiteral("State"), QStringLiteral("Send All")});
     m_tcpPortTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_tcpPortTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_tcpPortTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_tcpPortTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tcpPortTable->verticalHeader()->setVisible(false);
     m_tcpPortTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_tcpPortTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_tcpPortTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    QObject::connect(m_tcpPortTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateBatchActionState);
     boxLayout->addWidget(m_tcpPortTable);
 
     m_tcpCommandTabs = new QTabWidget(portBox);
@@ -580,7 +586,7 @@ void MainWindow::setupSerialPortUi()
     m_serialAddPortButton = new QPushButton(QStringLiteral("+ Add Port"), m_serialPortBox);
     m_serialRemovePortButton = new QPushButton(QStringLiteral("- Remove Port"), m_serialPortBox);
     m_serialRefreshButton = new QPushButton(QStringLiteral("Refresh"), m_serialPortBox);
-    m_serialSendAllButton = new QPushButton(QStringLiteral("Send All Serial Ports"), m_serialPortBox);
+    m_serialSendAllButton = new QPushButton(QStringLiteral("Send Selected Ports"), m_serialPortBox);
     toolbar->addWidget(m_serialAddPortButton);
     toolbar->addWidget(m_serialRemovePortButton);
     toolbar->addWidget(m_serialRefreshButton);
@@ -592,12 +598,13 @@ void MainWindow::setupSerialPortUi()
     m_serialPortTable->setColumnCount(3);
     m_serialPortTable->setHorizontalHeaderLabels({QStringLiteral("Port"), QStringLiteral("State"), QStringLiteral("Send All")});
     m_serialPortTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_serialPortTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_serialPortTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_serialPortTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_serialPortTable->verticalHeader()->setVisible(false);
     m_serialPortTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_serialPortTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_serialPortTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    QObject::connect(m_serialPortTable, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateBatchActionState);
     boxLayout->addWidget(m_serialPortTable);
 
     m_serialCommandTabs = new QTabWidget(m_serialPortBox);
@@ -791,7 +798,7 @@ void MainWindow::slotRemoveSerialPort()
 /** 对所有已连接串口分别启动一次 Send All。 */
 void MainWindow::slotSendAllSerialPorts()
 {
-    for (SerialPortSession *session : m_serialSessions) {
+    for (SerialPortSession *session : selectedSerialSessions()) {
         sendAllSerialPort(session);
     }
 }
@@ -927,10 +934,80 @@ bool MainWindow::isTcpMode() const
 }
 
 /** 为全部 TCP 会话创建基于任务队列的 worker 并发起连接。 */
+QVector<TcpPortSession *> MainWindow::selectedTcpSessions() const
+{
+    QVector<TcpPortSession *> selected;
+    if (!m_tcpPortTable || !m_tcpPortTable->selectionModel()) return selected;
+
+    for (const QModelIndex &index : m_tcpPortTable->selectionModel()->selectedRows(0)) {
+        const quint16 port = static_cast<quint16>(index.data().toUInt());
+        if (TcpPortSession *session = m_tcpSessions.value(port, nullptr)) selected.push_back(session);
+    }
+    return selected;
+}
+
+QVector<SerialPortSession *> MainWindow::selectedSerialSessions() const
+{
+    QVector<SerialPortSession *> selected;
+    if (!m_serialPortTable || !m_serialPortTable->selectionModel()) return selected;
+
+    for (const QModelIndex &index : m_serialPortTable->selectionModel()->selectedRows(0)) {
+        const QString portName = index.data().toString();
+        if (SerialPortSession *session = m_serialSessions.value(portName, nullptr)) selected.push_back(session);
+    }
+    return selected;
+}
+
+void MainWindow::updateBatchActionState()
+{
+    if (!ui) return;
+
+    if (isTcpMode()) {
+        const QVector<TcpPortSession *> selected = selectedTcpSessions();
+        bool canConnect = false;
+        bool canDisconnect = false;
+        bool canStart = false;
+        bool canStop = false;
+        bool canSend = false;
+        for (const TcpPortSession *session : selected) {
+            canConnect = canConnect || (!session->connected && !session->connecting && !session->testRunning);
+            canDisconnect = canDisconnect || session->connected || session->connecting;
+            canStart = canStart || (session->connected && !session->testRunning && !session->oneShotRunning);
+            canStop = canStop || session->testRunning || session->oneShotRunning;
+            canSend = canSend || (session->connected && !session->oneShotRunning);
+        }
+        ui->pushButtonConnect->setEnabled(canConnect);
+        ui->pushButtonDisconnect->setEnabled(canDisconnect);
+        ui->pushButtonStart->setEnabled(canStart);
+        ui->pushButtonStop->setEnabled(canStop);
+        if (m_tcpSendAllButton) m_tcpSendAllButton->setEnabled(canSend);
+    } else {
+        const QVector<SerialPortSession *> selected = selectedSerialSessions();
+        bool canConnect = false;
+        bool canDisconnect = false;
+        bool canStart = false;
+        bool canStop = false;
+        bool canSend = false;
+        for (const SerialPortSession *session : selected) {
+            canConnect = canConnect || (!session->connected && !session->connecting && !session->testRunning);
+            canDisconnect = canDisconnect || session->connected || session->connecting;
+            canStart = canStart || (session->connected && !session->testRunning && !session->oneShotRunning);
+            canStop = canStop || session->testRunning || session->oneShotRunning;
+            canSend = canSend || (session->connected && !session->oneShotRunning);
+        }
+        ui->pushButtonConnect->setEnabled(canConnect);
+        ui->pushButtonDisconnect->setEnabled(canDisconnect);
+        ui->pushButtonStart->setEnabled(canStart);
+        ui->pushButtonStop->setEnabled(canStop);
+        if (m_serialSendAllButton) m_serialSendAllButton->setEnabled(canSend);
+    }
+}
+
 void MainWindow::connectTcpPorts()
 {
-    if (m_tcpSessions.isEmpty()) {
-        appendLog(LogLevel::Error, QStringLiteral("Add at least one TCP port first"));
+    const QVector<TcpPortSession *> selected = selectedTcpSessions();
+    if (selected.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("Select at least one TCP port first"));
         return;
     }
 
@@ -940,8 +1017,9 @@ void MainWindow::connectTcpPorts()
         return;
     }
 
-    destroyTcpWorkers();
-    for (TcpPortSession *session : m_tcpSessions) {
+    int started = 0;
+    for (TcpPortSession *session : selected) {
+        if (session->connected || session->connecting || session->testRunning) continue;
         auto *worker = new TcpClientWorker(address.toString(), session->port);
         session->worker = worker;
         session->connecting = true;
@@ -963,9 +1041,25 @@ void MainWindow::connectTcpPorts()
             session->connecting = false;
             updateTcpPortRow(session, QStringLiteral("Disconnected"));
             appendLog(LogLevel::Info, QStringLiteral("[Port %1] Disconnected").arg(session->port));
-            if (session->testRunning) {
+            if (session->testRunning || session->oneShotRunning) {
                 session->statisticsValid = false;
-                stopTcpTest(true);
+                if (session->sendTimer) session->sendTimer->stop();
+                session->testRunning = false;
+                session->oneShotRunning = false;
+                session->oneShotCommands.clear();
+                session->finishingAfterLimit = true;
+                const QVector<PacketInfo> lost = session->statistics.markAllPendingLost();
+                for (const PacketInfo &packet : lost) {
+                    const ResponseLogEntry entry = formatPendingResponseError(
+                        QStringLiteral("[Port %1]").arg(session->port),
+                        packet.id,
+                        QStringLiteral("lost after disconnect"),
+                        {},
+                        packet.txFormat);
+                    appendLog(LogLevel::Error, entry.message);
+                }
+                m_testRunning = false;
+                for (const TcpPortSession *other : m_tcpSessions) m_testRunning = m_testRunning || other->testRunning;
             }
             updateTcpConnectionState();
         });
@@ -1032,7 +1126,7 @@ void MainWindow::connectTcpPorts()
                 else scheduleNextOneShotTcpPacket(session, ui->spinBoxInterval->value());
             } else if (session->testRunning) {
                 if (session->finishingAfterLimit) {
-                    if (!session->statistics.hasPendingPackets()) stopTcpTest(false);
+                    if (!session->statistics.hasPendingPackets()) checkTcpTimeouts();
                 } else {
                     scheduleNextTcpPacket(session, ui->spinBoxInterval->value());
                 }
@@ -1075,47 +1169,49 @@ void MainWindow::connectTcpPorts()
         worker->setSendInterval(ui->spinBoxInterval->value());
         worker->connect();
         updateTcpPortRow(session, QStringLiteral("Connecting"));
+        ++started;
     }
-    ui->pushButtonConnect->setEnabled(false);
-    ui->pushButtonDisconnect->setEnabled(true);
-    appendLog(LogLevel::Info, QStringLiteral("Connecting to %1 TCP ports at %2").arg(m_tcpSessions.size()).arg(address.toString()));
+    appendLog(LogLevel::Info, QStringLiteral("Connecting to %1 selected TCP ports at %2").arg(started).arg(address.toString()));
+    updateTcpConnectionState();
 }
 
 /** 关闭全部 TCP worker 并更新每个端口的状态。 */
 void MainWindow::disconnectTcpPorts()
 {
-    destroyTcpWorkers();
-    for (TcpPortSession *session : m_tcpSessions) {
-        session->connected = false;
-        session->connecting = false;
+    const QVector<TcpPortSession *> selected = selectedTcpSessions();
+    int stopped = 0;
+    for (TcpPortSession *session : selected) {
+        if (!session->worker && !session->connected && !session->connecting) continue;
+        destroyTcpWorker(session);
         updateTcpPortRow(session, QStringLiteral("Disconnected"));
+        ++stopped;
     }
     updateTcpConnectionState();
-    appendLog(LogLevel::Info, QStringLiteral("All TCP connections closed"));
+    appendLog(LogLevel::Info, QStringLiteral("Disconnected %1 selected TCP ports").arg(stopped));
 }
 
 /** 停止并释放全部 TCP 会话的定时器和任务队列 worker。 */
+void MainWindow::destroyTcpWorker(TcpPortSession *session)
+{
+    if (!session) return;
+    if (session->sendTimer) session->sendTimer->stop();
+    session->oneShotCommands.clear();
+    session->oneShotRunning = false;
+    if (session->worker) {
+        QObject::disconnect(session->worker, nullptr, this, nullptr);
+        static_cast<TcpClientWorker *>(session->worker)->disconnect();
+        delete static_cast<TcpClientWorker *>(session->worker);
+    }
+    delete session->sendTimer;
+    session->sendTimer = nullptr;
+    session->worker = nullptr;
+    session->connected = false;
+    session->connecting = false;
+}
+
 void MainWindow::destroyTcpWorkers()
 {
-    for (TcpPortSession *session : m_tcpSessions) {
-        if (session->sendTimer) session->sendTimer->stop();
-        session->oneShotCommands.clear();
-        session->oneShotRunning = false;
-        if (!session->worker) {
-            session->worker = nullptr;
-            continue;
-        }
-        if (session->worker) {
-            QObject::disconnect(session->worker, nullptr, this, nullptr);
-            static_cast<TcpClientWorker *>(session->worker)->disconnect();
-            delete static_cast<TcpClientWorker *>(session->worker);
-        }
-        delete session->sendTimer;
-        session->sendTimer = nullptr;
-        session->worker = nullptr;
-        session->connected = false;
-        session->connecting = false;
-    }
+    for (TcpPortSession *session : m_tcpSessions) destroyTcpWorker(session);
 }
 
 /** 更新 TCP 状态表中指定端口的状态文本。 */
@@ -1151,22 +1247,21 @@ void MainWindow::updateTcpConnectionState()
     }
     ui->labelConnectionState->setText(state);
     ui->frameLed->setStyleSheet(QStringLiteral("background:%1; border:1px solid rgba(255,255,255,0.35); border-radius:8px;").arg(color));
-    ui->pushButtonConnect->setEnabled(!m_testRunning && connecting == 0 &&
-                                      (m_tcpSessions.isEmpty() || connected != m_tcpSessions.size()));
-    ui->pushButtonDisconnect->setEnabled(connected > 0 || connecting > 0);
+    updateBatchActionState();
 }
 
 /** 创建基于任务队列的串口 worker 并并发打开全部串口。 */
 void MainWindow::connectSerialPorts()
 {
-    if (m_serialSessions.isEmpty()) {
-        appendLog(LogLevel::Error, QStringLiteral("Add at least one serial port first"));
+    const QVector<SerialPortSession *> selected = selectedSerialSessions();
+    if (selected.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("Select at least one serial port first"));
         return;
     }
 
-    destroySerialWorkers();
     int started = 0;
-    for (SerialPortSession *session : m_serialSessions) {
+    for (SerialPortSession *session : selected) {
+        if (session->connected || session->connecting || session->testRunning) continue;
         const SerialSettings settings = serialSettings(session);
         if (settings.portName.isEmpty()) {
             appendLog(LogLevel::Error, QStringLiteral("[%1] Invalid serial port name").arg(session->portName));
@@ -1197,13 +1292,23 @@ void MainWindow::connectSerialPorts()
             if (session->sendTimer) session->sendTimer->stop();
             updateSerialPortRow(session, QStringLiteral("Disconnected"));
             appendLog(LogLevel::Info, QStringLiteral("[%1] Disconnected").arg(session->portName));
-            if (session->testRunning) {
+            if (session->testRunning || session->oneShotRunning) {
                 session->statisticsValid = false;
                 if (session->sendTimer) session->sendTimer->stop();
                 session->testRunning = false;
+                session->oneShotRunning = false;
+                session->oneShotCommands.clear();
                 session->finishingAfterLimit = true;
                 const QVector<PacketInfo> lost = session->statistics.markAllPendingLost();
-                for (const PacketInfo &packet : lost) appendLog(LogLevel::Error, QStringLiteral("[%1] #%2 lost after disconnect").arg(session->portName).arg(packet.id));
+                for (const PacketInfo &packet : lost) {
+                    const ResponseLogEntry entry = formatPendingResponseError(
+                        QStringLiteral("[%1]").arg(session->portName),
+                        packet.id,
+                        QStringLiteral("lost after disconnect"),
+                        {},
+                        packet.txFormat);
+                    appendLog(LogLevel::Error, entry.message);
+                }
                 bool anyRunning = false;
                 for (const SerialPortSession *other : m_serialSessions) anyRunning = anyRunning || other->testRunning;
                 m_testRunning = anyRunning;
@@ -1274,7 +1379,7 @@ void MainWindow::connectSerialPorts()
                 else scheduleNextOneShotSerialPacket(session, ui->spinBoxInterval->value());
             } else if (session->testRunning) {
                 if (session->finishingAfterLimit) {
-                    if (!session->statistics.hasPendingPackets()) stopSerialTest(false);
+                    if (!session->statistics.hasPendingPackets()) checkSerialTimeouts();
                 } else {
                     scheduleNextSerialPacket(session, ui->spinBoxInterval->value());
                 }
@@ -1325,15 +1430,17 @@ void MainWindow::connectSerialPorts()
 /** 关闭全部串口连接并恢复可编辑状态。 */
 void MainWindow::disconnectSerialPorts()
 {
-    destroySerialWorkers();
-    for (SerialPortSession *session : m_serialSessions) {
-        session->connected = false;
-        session->connecting = false;
+    const QVector<SerialPortSession *> selected = selectedSerialSessions();
+    int stopped = 0;
+    for (SerialPortSession *session : selected) {
+        if (!session->worker && !session->connected && !session->connecting) continue;
+        destroySerialWorker(session);
         if (session->portCombo) session->portCombo->setEnabled(true);
         updateSerialPortRow(session, QStringLiteral("Disconnected"));
+        ++stopped;
     }
     updateSerialConnectionState();
-    appendLog(LogLevel::Info, QStringLiteral("All serial connections closed"));
+    appendLog(LogLevel::Info, QStringLiteral("Disconnected %1 selected serial ports").arg(stopped));
 }
 
 /** 关闭一个串口 worker 的设备、任务队列和发送定时器。 */
@@ -1401,8 +1508,7 @@ void MainWindow::updateSerialConnectionState()
     }
     ui->labelConnectionState->setText(state);
     ui->frameLed->setStyleSheet(QStringLiteral("background:%1; border:1px solid rgba(255,255,255,0.35); border-radius:8px;").arg(color));
-    ui->pushButtonConnect->setEnabled(!m_testRunning && connecting == 0 && connected != m_serialSessions.size());
-    ui->pushButtonDisconnect->setEnabled(connected > 0 || connecting > 0);
+    updateBatchActionState();
 }
 
 /** 将指定串口的全部命令加入单次发送队列。 */
@@ -1515,16 +1621,17 @@ void MainWindow::handleSerialSendFailure(SerialPortSession *session, const QStri
 
 void MainWindow::startSerialTest()
 {
-    if (m_serialSessions.isEmpty()) {
-        appendLog(LogLevel::Error, QStringLiteral("Add at least one serial port first"));
+    const QVector<SerialPortSession *> selected = selectedSerialSessions();
+    if (selected.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("Select at least one serial port first"));
         return;
     }
     int active = 0;
-    for (SerialPortSession *session : m_serialSessions) {
+    for (SerialPortSession *session : selected) {
         if (!session->connected || !session->worker) {
-            appendLog(LogLevel::Error, QStringLiteral("[%1] Skipped: not connected").arg(session->portName));
             continue;
         }
+        if (session->testRunning || session->oneShotRunning) continue;
         const QList<CommandItem> commands = collectSerialCommands(session);
         if (!validateCommands(commands)) continue;
         logSerialSessionParameters(session, QStringLiteral("Continuous Test"));
@@ -1546,30 +1653,28 @@ void MainWindow::startSerialTest()
     }
     m_testRunning = true;
     m_serialFinalStats.clear();
-    ui->pushButtonStart->setEnabled(false);
-    ui->pushButtonStop->setEnabled(true);
-    ui->pushButtonConnect->setEnabled(false);
-    ui->comboBoxMode->setEnabled(false);
-    if (m_serialAddPortButton) m_serialAddPortButton->setEnabled(false);
-    if (m_serialRemovePortButton) m_serialRemovePortButton->setEnabled(false);
-    if (m_serialRefreshButton) m_serialRefreshButton->setEnabled(false);
-    if (m_serialSendAllButton) m_serialSendAllButton->setEnabled(false);
-    if (m_serialPortTable) m_serialPortTable->setEnabled(false);
-    for (SerialPortSession *session : m_serialSessions) {
-        if (session && session->commandPage) session->commandPage->setEnabled(false);
+    for (SerialPortSession *session : selected) {
+        if (session->testRunning && session->commandPage) session->commandPage->setEnabled(false);
     }
     m_timeoutTimer->start();
-    appendLog(LogLevel::Info, QStringLiteral("Multi-serial test started: %1 ports, timeout %2 ms").arg(active).arg(ui->spinBoxTimeout->value()));
-    for (SerialPortSession *session : m_serialSessions) if (session->testRunning) sendNextSerialPacket(session);
+    appendLog(LogLevel::Info, QStringLiteral("Selected serial test started: %1 ports, timeout %2 ms").arg(active).arg(ui->spinBoxTimeout->value()));
+    for (SerialPortSession *session : selected) if (session->testRunning) sendNextSerialPacket(session);
+    updateBatchActionState();
 }
 
 /** 停止串口连续测试，标记未完成请求并保存报告。 */
-void MainWindow::stopSerialTest(bool manualStop)
+void MainWindow::stopSerialTest(bool manualStop, bool selectedOnly)
 {
-    bool anyRunning = m_testRunning;
-    for (SerialPortSession *session : m_serialSessions) anyRunning = anyRunning || session->testRunning;
-    if (!anyRunning) return;
-    for (SerialPortSession *session : m_serialSessions) {
+    const QVector<SerialPortSession *> selected = selectedOnly
+        ? selectedSerialSessions()
+        : QVector<SerialPortSession *>::fromList(m_serialSessions.values());
+    bool selectedRunning = false;
+    for (const SerialPortSession *session : selected) {
+        selectedRunning = selectedRunning || session->testRunning || session->oneShotRunning;
+    }
+    if (!selectedRunning) return;
+    for (SerialPortSession *session : selected) {
+        if (!session->testRunning && !session->oneShotRunning) continue;
         if (session->sendTimer) session->sendTimer->stop();
         session->oneShotRunning = false;
         session->testRunning = false;
@@ -1585,11 +1690,13 @@ void MainWindow::stopSerialTest(bool manualStop)
                 packet.txFormat);
             appendLog(LogLevel::Error, entry.message);
         }
+        if (session->commandPage) session->commandPage->setEnabled(true);
     }
     m_testRunning = false;
-    m_timeoutTimer->stop();
+    for (const SerialPortSession *session : m_serialSessions) m_testRunning = m_testRunning || session->testRunning;
+    if (!m_testRunning) m_timeoutTimer->stop();
     m_serialFinalStats.clear();
-    for (SerialPortSession *session : m_serialSessions) {
+    for (SerialPortSession *session : selected) {
         const StatisticsSnapshot snap = session->statistics.snapshot();
         m_serialFinalStats.insert(session->portName, snap);
         appendLog(LogLevel::Info, QStringLiteral("[%1] Final P50=%2 ms P90=%3 ms P95=%4 ms P99=%5 ms Success=%6/%7 Rate=%8% Average=%9 ms Max=%10 ms Min=%11 ms")
@@ -1601,19 +1708,8 @@ void MainWindow::stopSerialTest(bool manualStop)
         }
         updateSerialSessionStats(session);
     }
-    if (manualStop) appendLog(LogLevel::Info, QStringLiteral("Multi-serial test stopped manually"));
+    if (manualStop) appendLog(LogLevel::Info, QStringLiteral("Selected serial tests stopped manually"));
     scheduleStatsRefresh();
-    ui->pushButtonStart->setEnabled(true);
-    ui->pushButtonStop->setEnabled(false);
-    ui->comboBoxMode->setEnabled(true);
-    if (m_serialAddPortButton) m_serialAddPortButton->setEnabled(true);
-    if (m_serialRemovePortButton) m_serialRemovePortButton->setEnabled(true);
-    if (m_serialRefreshButton) m_serialRefreshButton->setEnabled(true);
-    if (m_serialSendAllButton) m_serialSendAllButton->setEnabled(true);
-    if (m_serialPortTable) m_serialPortTable->setEnabled(true);
-    for (SerialPortSession *session : m_serialSessions) {
-        if (session && session->commandPage) session->commandPage->setEnabled(true);
-    }
     updateSerialConnectionState();
 }
 
@@ -1668,14 +1764,17 @@ void MainWindow::scheduleNextSerialPacket(SerialPortSession *session, int interv
 void MainWindow::checkSerialTimeouts()
 {
     bool allFinished = true;
+    bool hasActive = false;
     bool hasTest = false;
     for (SerialPortSession *session : m_serialSessions) {
         if (!session->testRunning && !session->oneShotRunning) continue;
+        hasActive = true;
         if (session->testRunning) hasTest = true;
         if (!(session->finishingAfterLimit && !session->statistics.hasPendingPackets()) && session->testRunning) allFinished = false;
         updateSerialSessionStats(session);
     }
-    if (hasTest && allFinished) stopSerialTest(false);
+    if (hasTest && allFinished) stopSerialTest(false, false);
+    if (!hasActive) m_timeoutTimer->stop();
     scheduleStatsRefresh();
 }
 
@@ -1692,7 +1791,7 @@ void MainWindow::slotSendSelectedTcpPort()
 /** 对全部 TCP 会话并发执行单次 Send All。 */
 void MainWindow::slotSendAllTcpPorts()
 {
-    for (TcpPortSession *session : m_tcpSessions) {
+    for (TcpPortSession *session : selectedTcpSessions()) {
         sendAllTcpPort(session);
     }
 }
@@ -1813,16 +1912,17 @@ void MainWindow::handleTcpSendFailure(TcpPortSession *session, const QString &re
 
 void MainWindow::startTcpTest()
 {
-    if (m_tcpSessions.isEmpty() || !m_connected) {
-        appendLog(LogLevel::Error, QStringLiteral("Connect all TCP ports before starting"));
+    const QVector<TcpPortSession *> selected = selectedTcpSessions();
+    if (selected.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("Select at least one TCP port first"));
         return;
     }
-    for (TcpPortSession *session : m_tcpSessions) {
-        if (!validateCommands(collectCommands(session->commandTable))) return;
-    }
 
-    for (TcpPortSession *session : m_tcpSessions) {
+    QVector<TcpPortSession *> active;
+    for (TcpPortSession *session : selected) {
+        if (!session->connected || !session->worker || session->testRunning || session->oneShotRunning) continue;
         const QList<CommandItem> commands = collectCommands(session->commandTable);
+        if (!validateCommands(commands)) continue;
         logTcpSessionParameters(session, QStringLiteral("Continuous Test"));
         session->statistics.reset();
         session->worker->resetStatistics();
@@ -1837,36 +1937,41 @@ void MainWindow::startTcpTest()
         session->finishingAfterLimit = false;
         session->sendClock.start();
         session->nextSendDeadlineMs = 0;
+        active.push_back(session);
+    }
+    if (active.isEmpty()) {
+        appendLog(LogLevel::Error, QStringLiteral("No selected TCP port is ready to start"));
+        return;
     }
     m_testRunning = true;
     m_tcpFinalStats.clear();
-    ui->pushButtonStart->setEnabled(false);
-    ui->pushButtonStop->setEnabled(true);
-    ui->pushButtonConnect->setEnabled(false);
-    ui->comboBoxMode->setEnabled(false);
-    m_tcpAddPortButton->setEnabled(false);
-    m_tcpBatchAddPortButton->setEnabled(false);
-    m_tcpRemovePortButton->setEnabled(false);
-    m_tcpSendAllButton->setEnabled(false);
-    for (TcpPortSession *session : m_tcpSessions) {
-        if (session && session->commandPage) session->commandPage->setEnabled(false);
+    for (TcpPortSession *session : active) {
+        if (session->commandPage) session->commandPage->setEnabled(false);
     }
-    m_tcpPortTable->setEnabled(false);
     m_timeoutTimer->start();
-    appendLog(LogLevel::Info, QStringLiteral("Multi-port test started: %1 ports, timeout %2 ms")
-                                 .arg(m_tcpSessions.size()).arg(ui->spinBoxTimeout->value()));
-    for (TcpPortSession *session : m_tcpSessions) sendNextTcpPacket(session);
+    appendLog(LogLevel::Info, QStringLiteral("Selected TCP test started: %1 ports, timeout %2 ms")
+                                 .arg(active.size()).arg(ui->spinBoxTimeout->value()));
+    for (TcpPortSession *session : active) sendNextTcpPacket(session);
+    updateBatchActionState();
 }
 
 /** 停止 TCP 连续测试、处理未完成请求并保存报告。 */
-void MainWindow::stopTcpTest(bool manualStop)
+void MainWindow::stopTcpTest(bool manualStop, bool selectedOnly)
 {
-    bool anyRunning = m_testRunning;
-    for (TcpPortSession *session : m_tcpSessions) anyRunning = anyRunning || session->testRunning;
-    if (!anyRunning) return;
+    const QVector<TcpPortSession *> selected = selectedOnly
+        ? selectedTcpSessions()
+        : QVector<TcpPortSession *>::fromList(m_tcpSessions.values());
+    bool selectedRunning = false;
+    for (const TcpPortSession *session : selected) {
+        selectedRunning = selectedRunning || session->testRunning || session->oneShotRunning;
+    }
+    if (!selectedRunning) return;
 
-    for (TcpPortSession *session : m_tcpSessions) {
+    for (TcpPortSession *session : selected) {
+        if (!session->testRunning && !session->oneShotRunning) continue;
         if (session->sendTimer) session->sendTimer->stop();
+        session->oneShotRunning = false;
+        session->oneShotCommands.clear();
         session->testRunning = false;
         session->finishingAfterLimit = false;
         const QVector<PacketInfo> lost = session->statistics.markAllPendingLost();
@@ -1880,11 +1985,13 @@ void MainWindow::stopTcpTest(bool manualStop)
                 packet.txFormat);
             appendLog(LogLevel::Error, entry.message);
         }
+        if (session->commandPage) session->commandPage->setEnabled(true);
     }
     m_testRunning = false;
-    m_timeoutTimer->stop();
+    for (const TcpPortSession *session : m_tcpSessions) m_testRunning = m_testRunning || session->testRunning;
+    if (!m_testRunning) m_timeoutTimer->stop();
     m_tcpFinalStats.clear();
-    for (TcpPortSession *session : m_tcpSessions) {
+    for (TcpPortSession *session : selected) {
         const StatisticsSnapshot snap = session->statistics.snapshot();
         m_tcpFinalStats.insert(session->port, snap);
         appendLog(LogLevel::Info, QStringLiteral("[Port %1] Final P50=%2 ms P90=%3 ms P95=%4 ms P99=%5 ms Success=%6/%7 Rate=%8% Average=%9 ms Max=%10 ms Min=%11 ms")
@@ -1895,19 +2002,8 @@ void MainWindow::stopTcpTest(bool manualStop)
             appendLog(LogLevel::Error, QStringLiteral("[Port %1] Final statistics include communication errors").arg(session->port));
         }
     }
-    if (manualStop) appendLog(LogLevel::Info, QStringLiteral("Multi-port test stopped manually"));
+    if (manualStop) appendLog(LogLevel::Info, QStringLiteral("Selected TCP tests stopped manually"));
     scheduleStatsRefresh();
-    ui->pushButtonStart->setEnabled(true);
-    ui->pushButtonStop->setEnabled(false);
-    ui->comboBoxMode->setEnabled(true);
-    m_tcpAddPortButton->setEnabled(true);
-    m_tcpBatchAddPortButton->setEnabled(true);
-    m_tcpRemovePortButton->setEnabled(true);
-    m_tcpSendAllButton->setEnabled(true);
-    for (TcpPortSession *session : m_tcpSessions) {
-        if (session && session->commandPage) session->commandPage->setEnabled(true);
-    }
-    m_tcpPortTable->setEnabled(true);
     updateTcpConnectionState();
 }
 
@@ -1965,17 +2061,20 @@ void MainWindow::scheduleNextTcpPacket(TcpPortSession *session, int intervalMs)
 void MainWindow::checkTcpTimeouts()
 {
     bool allFinished = true;
+    bool hasActive = false;
     bool hasTest = false;
     for (TcpPortSession *session : m_tcpSessions) {
         if (!session->testRunning && !session->oneShotRunning) continue;
+        hasActive = true;
         if (session->testRunning) hasTest = true;
         if (session->testRunning && !(session->finishingAfterLimit && !session->statistics.hasPendingPackets())) allFinished = false;
     }
-    if (hasTest && allFinished) stopTcpTest(false);
+    if (hasTest && allFinished) stopTcpTest(false, false);
+    if (!hasActive) m_timeoutTimer->stop();
     scheduleStatsRefresh();
 }
 
-/** 响应顶部 Connect All 按钮并分派到当前模式。 */
+/** 响应顶部 Connect Selected 按钮并分派到当前模式。 */
 void MainWindow::slotConnectClicked()
 {
     if (isTcpMode()) {
@@ -1985,7 +2084,7 @@ void MainWindow::slotConnectClicked()
     connectSerialPorts();
 }
 
-/** 响应顶部 Disconnect All 按钮并关闭当前模式连接。 */
+/** 响应顶部 Disconnect Selected 按钮并关闭当前模式连接。 */
 void MainWindow::slotDisconnectClicked()
 {
     if (isTcpMode()) {
