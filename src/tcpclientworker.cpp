@@ -249,10 +249,13 @@ void TcpClientWorker::ioLoop()
                         }
                         emit signalBytesWritten(totalWritten);
                         emit signalDataSent(task.data, task.format);
+                        // HEX 请求以 A0 81 或 01 06 开头时，响应按协议帧处理。
                         expectProtocolFrame = task.format.compare(QStringLiteral("HEX"), Qt::CaseInsensitive) == 0 &&
                                               task.data.size() >= 2 &&
-                                              static_cast<quint8>(task.data.at(0)) == 0xA0 &&
-                                              static_cast<quint8>(task.data.at(1)) == 0x81;
+                                              ((static_cast<quint8>(task.data.at(0)) == 0xA0 &&
+                                                static_cast<quint8>(task.data.at(1)) == 0x81) ||
+                                               (static_cast<quint8>(task.data.at(0)) == 0x01 &&
+                                                static_cast<quint8>(task.data.at(1)) == 0x06));
                         expectedResponseBytes = task.data.size();
                         rawResponseBuffer.clear();
                         decoder.clear();
@@ -269,7 +272,8 @@ void TcpClientWorker::ioLoop()
                 ? std::max(1, std::min(2, m_receiveTimeoutMs.load(std::memory_order_acquire) - static_cast<int>(responseTimer.elapsed())))
                 : 0;
             if (socket.waitForReadyRead(pollMs)) {
-                const QByteArray receivedChunk = socket.read(64 * 1024);
+                // 单次最多读取 4 MiB；TCP 数据仍可能分多次到达，后续由缓冲区继续拼接。
+                const QByteArray receivedChunk = socket.read(4 * 1024 * 1024);
                 if (waitingForResponse && !expectProtocolFrame) {
                     if (receivedChunk.size() > kMaxResponseBufferBytes || rawResponseBuffer.size() > kMaxResponseBufferBytes - receivedChunk.size()) {
                         rawResponseBuffer.clear();
@@ -295,13 +299,15 @@ void TcpClientWorker::ioLoop()
                         }
                         waitingForResponse = false;
                         armSendInterval(responseCompletedAt);
-                        emit signalDataReceived(response.data, response.valid);
+                        const QString errorReason = response.invalidReason.has_value()
+                            ? responseInvalidReasonText(*response.invalidReason)
+                            : QString();
+                        emit signalDataReceived(response.data, response.valid, errorReason);
                     }
                 } else {
                     const ResponseBatch batch = collectProtocolResponse(decoder.appendData(receivedChunk));
                     for (const QString &error : batch.errors) reportError(error);
-                    if (!batch.events.isEmpty()) {
-                        const ResponseEvent response = batch.events.constFirst();
+                    for (const ResponseEvent &response : batch.events) {
                         const auto responseCompletedAt = std::chrono::steady_clock::now();
                         {
                             std::lock_guard<std::mutex> lock(m_statsMutex);
@@ -313,7 +319,10 @@ void TcpClientWorker::ioLoop()
                         }
                         waitingForResponse = false;
                         armSendInterval(responseCompletedAt);
-                        emit signalDataReceived(response.data, response.valid);
+                        const QString errorReason = response.invalidReason.has_value()
+                            ? responseInvalidReasonText(*response.invalidReason)
+                            : QString();
+                        emit signalDataReceived(response.data, response.valid, errorReason);
                     }
                 }
             }

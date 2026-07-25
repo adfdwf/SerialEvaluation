@@ -4,6 +4,7 @@
 #include <QtTest>
 
 using Ciqtek::ProtocolFrameDecoder;
+using Ciqtek::ResponseInvalidReason;
 using Ciqtek::ResponseLogLevel;
 using Ciqtek::collectLengthResponse;
 using Ciqtek::collectProtocolResponse;
@@ -23,6 +24,8 @@ private Q_SLOTS:
         QCOMPARE(batch.events.size(), 1);
         QCOMPARE(batch.events.constFirst().data, received);
         QVERIFY(!batch.events.constFirst().valid);
+        QVERIFY(batch.events.constFirst().invalidReason.has_value());
+        QCOMPARE(*batch.events.constFirst().invalidReason, ResponseInvalidReason::LengthMismatch);
         QVERIFY(batch.errors.isEmpty());
     }
 
@@ -35,6 +38,8 @@ private Q_SLOTS:
         QCOMPARE(batch.events.size(), 1);
         QCOMPARE(batch.events.constFirst().data, received);
         QVERIFY(!batch.events.constFirst().valid);
+        QVERIFY(batch.events.constFirst().invalidReason.has_value());
+        QCOMPARE(*batch.events.constFirst().invalidReason, ResponseInvalidReason::LengthMismatch);
         QVERIFY(batch.errors.isEmpty());
     }
 
@@ -47,6 +52,7 @@ private Q_SLOTS:
         QCOMPARE(batch.events.size(), 1);
         QCOMPARE(batch.events.constFirst().data, received);
         QVERIFY(batch.events.constFirst().valid);
+        QVERIFY(!batch.events.constFirst().invalidReason.has_value());
         QVERIFY(batch.errors.isEmpty());
     }
 
@@ -58,7 +64,7 @@ private Q_SLOTS:
         QVERIFY(batch.errors.isEmpty());
     }
 
-    void aggregatesTcpProtocolFramesInReceiveOrder()
+    void emitsTcpProtocolFramesAsIndependentEvents()
     {
         ProtocolFrameDecoder decoder;
         const QByteArray first = QByteArray::fromHex("A00064810000000085");
@@ -66,10 +72,28 @@ private Q_SLOTS:
 
         const auto batch = collectProtocolResponse(decoder.appendData(first + second));
 
-        QCOMPARE(batch.events.size(), 1);
-        QCOMPARE(batch.events.constFirst().data, first + second);
-        QVERIFY(!batch.events.constFirst().valid);
+        QCOMPARE(batch.events.size(), 2);
+        QCOMPARE(batch.events.at(0).data, first);
+        QCOMPARE(batch.events.at(1).data, second);
+        QVERIFY(batch.events.at(0).valid);
+        QVERIFY(batch.events.at(1).valid);
+        QVERIFY(!batch.events.at(0).invalidReason.has_value());
+        QVERIFY(!batch.events.at(1).invalidReason.has_value());
         QVERIFY(batch.errors.isEmpty());
+    }
+
+    void reportsProtocolErrorWhenFramesAndDecoderErrorsCoexist()
+    {
+        ProtocolFrameDecoder::DecodeResult decoded;
+        decoded.frames.push_back(QByteArray::fromHex("A00064810000000085"));
+        decoded.errors.push_back(QStringLiteral("checksum failed"));
+
+        const auto batch = collectProtocolResponse(decoded);
+
+        QCOMPARE(batch.events.size(), 1);
+        QVERIFY(!batch.events.constFirst().valid);
+        QVERIFY(batch.events.constFirst().invalidReason.has_value());
+        QCOMPARE(*batch.events.constFirst().invalidReason, ResponseInvalidReason::ProtocolError);
     }
 
     void preservesOrdinaryProtocolResponseBehavior()
@@ -82,6 +106,7 @@ private Q_SLOTS:
         QCOMPARE(batch.events.size(), 1);
         QCOMPARE(batch.events.constFirst().data, response);
         QVERIFY(batch.events.constFirst().valid);
+        QVERIFY(!batch.events.constFirst().invalidReason.has_value());
         QVERIFY(batch.errors.isEmpty());
     }
 

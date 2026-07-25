@@ -7,13 +7,25 @@
 #include <QByteArray>
 #include <QString>
 #include <QVector>
+#include <optional>
 
 BEGIN_NAMESPACE_CIQTEK
+
+/** Why a response event was marked invalid. */
+enum class ResponseInvalidReason {
+    MultipleFrames,
+    ProtocolError,
+    LengthMismatch
+};
+
+/** Convert an invalid response reason to the concise text used in ERROR logs. */
+QString responseInvalidReasonText(ResponseInvalidReason reason);
 
 /** A single response notification emitted by a communication worker. */
 struct ResponseEvent {
     QByteArray data;
     bool valid = false;
+    std::optional<ResponseInvalidReason> invalidReason;
 };
 
 /** Response notifications and independent protocol errors produced by one read. */
@@ -40,8 +52,8 @@ struct ResponseLogEntry {
 ResponseBatch collectLengthResponse(const QByteArray &received, int expectedBytes);
 
 /**
- * Convert one protocol-decoder result into at most one response event.
- * Multiple decoded frames are concatenated in receive order and marked invalid.
+ * Convert one protocol-decoder result into one response event per decoded frame.
+ * Events preserve decoder order so each frame can be matched independently.
  */
 ResponseBatch collectProtocolResponse(const ProtocolFrameDecoder::DecodeResult &decoded);
 

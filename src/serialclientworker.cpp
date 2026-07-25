@@ -276,7 +276,10 @@ void SerialClientWorker::ioLoop()
                         }
                         waitingForResponse = false;
                         armSendInterval(responseCompletedAt);
-                        emit signalDataReceived(response.data, response.valid);
+                        const QString errorReason = response.invalidReason.has_value()
+                            ? responseInvalidReasonText(*response.invalidReason)
+                            : QString();
+                        emit signalDataReceived(response.data, response.valid, errorReason);
                     }
                 }
             }

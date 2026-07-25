@@ -4,6 +4,19 @@
 
 BEGIN_NAMESPACE_CIQTEK
 
+QString responseInvalidReasonText(ResponseInvalidReason reason)
+{
+    switch (reason) {
+    case ResponseInvalidReason::MultipleFrames:
+        return QStringLiteral("multiple protocol frames");
+    case ResponseInvalidReason::ProtocolError:
+        return QStringLiteral("protocol error");
+    case ResponseInvalidReason::LengthMismatch:
+        return QStringLiteral("response length mismatch");
+    }
+    return QStringLiteral("invalid response");
+}
+
 ResponseBatch collectLengthResponse(const QByteArray &received, int expectedBytes)
 {
     ResponseBatch batch;
@@ -11,7 +24,11 @@ ResponseBatch collectLengthResponse(const QByteArray &received, int expectedByte
         return batch;
     }
 
-    batch.events.push_back({received, received.size() == expectedBytes});
+    const bool exactLength = received.size() == expectedBytes;
+    batch.events.push_back({received,
+                            exactLength,
+                            exactLength ? std::nullopt
+                                        : std::optional<ResponseInvalidReason>(ResponseInvalidReason::LengthMismatch)});
     return batch;
 }
 
@@ -23,12 +40,12 @@ ResponseBatch collectProtocolResponse(const ProtocolFrameDecoder::DecodeResult &
         return batch;
     }
 
-    QByteArray responseData;
+    const std::optional<ResponseInvalidReason> invalidReason = decoded.errors.isEmpty()
+        ? std::nullopt
+        : std::optional<ResponseInvalidReason>(ResponseInvalidReason::ProtocolError);
     for (const QByteArray &frame : decoded.frames) {
-        responseData.append(frame);
+        batch.events.push_back({frame, !invalidReason.has_value(), invalidReason});
     }
-    batch.events.push_back({responseData,
-                            decoded.errors.isEmpty() && decoded.frames.size() == 1});
     return batch;
 }
 

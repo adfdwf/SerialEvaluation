@@ -3,6 +3,7 @@
 
 #include "icommunicationinterface.h"
 #include "namespace.h"
+#include "responsehandling.h"
 #include "statisticsmanager.h"
 
 #include <QObject>
@@ -59,7 +60,7 @@ public Q_SLOTS:
 Q_SIGNALS:
     void signalConnected();
     void signalDisconnected();
-    void signalDataReceived(const QByteArray &data, bool responseValid);
+    void signalDataReceived(const QByteArray &data, bool responseValid, const QString &errorReason);
     void signalErrorOccurred(const QString &message);
     void signalSendFailed(const QString &message);
     void signalResponseAborted(const QString &message);
