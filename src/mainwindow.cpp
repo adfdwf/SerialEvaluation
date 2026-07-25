@@ -25,7 +25,6 @@
 #include <QTabWidget>
 #include <QRadioButton>
 #include <QRegularExpression>
-#include <QTextStream>
 #include <QTextEdit>
 #include <QVBoxLayout>
 
@@ -73,6 +72,10 @@ MainWindow::~MainWindow()
     stopSerialTest(true, false);
     destroyTcpWorkers();
     destroySerialWorkers();
+    flushLogFiles();
+    qDeleteAll(m_logFiles);
+    m_logFiles.clear();
+    m_logFilePaths.clear();
     qDeleteAll(m_tcpSessions);
     m_tcpSessions.clear();
     qDeleteAll(m_serialSessions);
@@ -89,6 +92,10 @@ void MainWindow::setupUiLogic()
     m_statsTimer = new QTimer(this);
     m_statsTimer->setInterval(100);
     QObject::connect(m_statsTimer, &QTimer::timeout, this, &MainWindow::updateStatsView);
+    m_logFlushTimer = new QTimer(this);
+    m_logFlushTimer->setInterval(250);
+    QObject::connect(m_logFlushTimer, &QTimer::timeout, this, &MainWindow::flushLogFiles);
+    m_logFlushTimer->start();
     m_statsTimer->start();
 
     ui->spinBoxPort->setRange(1, 65535);
@@ -439,6 +446,7 @@ void MainWindow::removeTcpPort(quint16 port)
     if (!session) {
         return;
     }
+    closeLogFile(QStringLiteral("Port %1").arg(port));
     if (session->worker) {
         QObject::disconnect(session->worker, nullptr, this, nullptr);
         static_cast<TcpClientWorker *>(session->worker)->disconnect();
@@ -742,6 +750,7 @@ void MainWindow::removeSerialPort(const QString &portName)
     if (!session) {
         return;
     }
+    closeLogFile(portName);
     destroySerialWorker(session);
     const int tabIndex = m_serialCommandTabs->indexOf(session->commandPage);
     if (tabIndex >= 0) {
@@ -1188,6 +1197,7 @@ void MainWindow::disconnectTcpPorts()
     }
     updateTcpConnectionState();
     appendLog(LogLevel::Info, QStringLiteral("Disconnected %1 selected TCP ports").arg(stopped));
+    flushLogFiles();
 }
 
 /** 停止并释放全部 TCP 会话的定时器和任务队列 worker。 */
@@ -1441,6 +1451,7 @@ void MainWindow::disconnectSerialPorts()
     }
     updateSerialConnectionState();
     appendLog(LogLevel::Info, QStringLiteral("Disconnected %1 selected serial ports").arg(stopped));
+    flushLogFiles();
 }
 
 /** 关闭一个串口 worker 的设备、任务队列和发送定时器。 */
@@ -1709,6 +1720,7 @@ void MainWindow::stopSerialTest(bool manualStop, bool selectedOnly)
         updateSerialSessionStats(session);
     }
     if (manualStop) appendLog(LogLevel::Info, QStringLiteral("Selected serial tests stopped manually"));
+    flushLogFiles();
     scheduleStatsRefresh();
     updateSerialConnectionState();
 }
@@ -2003,6 +2015,7 @@ void MainWindow::stopTcpTest(bool manualStop, bool selectedOnly)
         }
     }
     if (manualStop) appendLog(LogLevel::Info, QStringLiteral("Selected TCP tests stopped manually"));
+    flushLogFiles();
     scheduleStatsRefresh();
     updateTcpConnectionState();
 }
@@ -2244,7 +2257,10 @@ void MainWindow::appendLog(LogLevel level, const QString &text, qint64 elapsedMs
     const QRegularExpressionMatch portMatch = portExpression.match(text);
     if (portMatch.hasMatch()) portTag = portMatch.captured(1);
     const QString line = QStringLiteral("[%1] %2%3 %4").arg(tag, timestamp, elapsed, text);
-    if (portTag != QStringLiteral("global")) appendLogFile(portTag, line);
+    if (portTag != QStringLiteral("global")) {
+        appendLogFile(portTag, line);
+        if (level == LogLevel::Error) flushLogFiles();
+    }
     appendPortLog(portTag, line, color);
 
 }
@@ -2365,13 +2381,37 @@ void MainWindow::appendLogFile(const QString &portTag, const QString &line)
         m_logFilePaths.insert(portTag, filePath);
     }
 
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) return;
-    QTextStream stream(&file);
-    stream.setEncoding(QStringConverter::Utf8);
-    stream << line << QLatin1Char('\n');
-    stream.flush();
-    file.close();
+    QFile *file = m_logFiles.value(portTag, nullptr);
+    if (!file) {
+        file = new QFile(filePath);
+        if (!file->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            delete file;
+            return;
+        }
+        m_logFiles.insert(portTag, file);
+    }
+
+    QByteArray record = line.toUtf8();
+    record.append('\n');
+    if (file->write(record) != record.size()) {
+        closeLogFile(portTag);
+    }
+}
+
+void MainWindow::flushLogFiles()
+{
+    for (QFile *file : m_logFiles) {
+        if (file && file->isOpen()) file->flush();
+    }
+}
+
+void MainWindow::closeLogFile(const QString &portTag)
+{
+    QFile *file = m_logFiles.take(portTag);
+    if (!file) return;
+    file->flush();
+    file->close();
+    delete file;
 }
 
 QString MainWindow::payloadToDisplay(const QByteArray &payload, const QString &format, bool truncate)

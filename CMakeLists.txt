@@ -110,4 +110,32 @@ if(BUILD_TESTING)
     target_link_libraries(ResponseHandlingTest PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME ResponseHandlingTest COMMAND ResponseHandlingTest)
 
+    add_executable(LogFileTest
+        tests/logfile_test.cpp
+        src/mainwindow.h
+        src/mainwindow.cpp
+        src/mainwindow.ui
+        src/protocolframedecoder.h
+        src/protocolframedecoder.cpp
+        src/responsehandling.h
+        src/responsehandling.cpp
+        src/tcpportparser.h
+        src/tcpportparser.cpp
+        src/tcpclientworker.h
+        src/tcpclientworker.cpp
+        src/serialclientworker.h
+        src/serialclientworker.cpp
+        src/statisticsmanager.h
+        src/statisticsmanager.cpp
+        src/namespace.h
+    )
+    target_include_directories(LogFileTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(LogFileTest PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Network
+        Qt${QT_VERSION_MAJOR}::SerialPort
+        Qt${QT_VERSION_MAJOR}::Test
+    )
+    add_test(NAME LogFileTest COMMAND LogFileTest)
+
 endif()

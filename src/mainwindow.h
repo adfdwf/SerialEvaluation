@@ -1,4 +1,4 @@
-﻿#ifndef MAINWINDOW_H
+#ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
 #include "namespace.h"
@@ -25,8 +25,9 @@ class QTabWidget;
 class QPushButton;
 class QComboBox;
 class QGroupBox;
-class QTextStream;
 class QTextEdit;
+class QFile;
+class LogFileTest;
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -102,6 +103,8 @@ struct SerialPortSession {
 class MainWindow final : public QMainWindow
 {
     Q_OBJECT
+
+    friend class ::LogFileTest;
 
 public:
     /** @brief 创建并初始化主窗口。 */
@@ -288,6 +291,10 @@ private:
     void refreshSerialPortChoices();
     /** @brief 将一条事件直接追加到对应端口的本地日志文件。 */
     void appendLogFile(const QString &portTag, const QString &line);
+    /** @brief 刷新所有已打开的端口日志文件。 */
+    void flushLogFiles();
+    /** @brief 关闭并释放指定端口的日志文件。 */
+    void closeLogFile(const QString &portTag);
     /** @brief 将端口日志事件显示到对应的独立日志区域。 */
     void appendPortLog(const QString &portTag, const QString &line, const QString &color);
     /** @brief 将当前 TCP 端口的全部界面参数写入该端口日志。 */
@@ -300,6 +307,7 @@ private:
     bool m_connected = false;                              ///< 当前模式的全局连接标志。
     QTimer *m_timeoutTimer = nullptr;                      ///< 全局超时检查定时器。
     QTimer *m_statsTimer = nullptr;                        ///< 实时统计刷新定时器。
+    QTimer *m_logFlushTimer = nullptr;                     ///< 日志文件批量刷新定时器。
     bool m_testRunning = false;                             ///< 当前是否有连续测试运行。
     QHash<quint16, TcpPortSession *> m_tcpSessions;        ///< TCP 端口号到会话对象的映射。
     QTableWidget *m_tcpPortTable = nullptr;                 ///< TCP 端口状态表格。
@@ -318,6 +326,7 @@ private:
     QPushButton *m_serialSendAllButton = nullptr;           ///< 串口全局 Send All 按钮。
     QTimer *m_serialHotplugTimer = nullptr;                 ///< 串口热插拔轮询定时器。
     QHash<QString, QString> m_logFilePaths;                 ///< 端口到当前本地日志文件路径的映射。
+    QHash<QString, QFile *> m_logFiles;                     ///< 端口到已打开日志文件的映射。
     QHash<quint16, StatisticsSnapshot> m_tcpFinalStats;     ///< TCP worker 停止时返回的最终统计。
     QHash<QString, StatisticsSnapshot> m_serialFinalStats;  ///< 串口 worker 停止时返回的最终统计。
 };
