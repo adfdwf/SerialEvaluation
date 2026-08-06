@@ -204,6 +204,8 @@ private:
     QVector<SerialPortSession *> selectedSerialSessions() const;
     /** @brief 根据当前模式、选择和会话状态刷新批量按钮。 */
     void updateBatchActionState();
+    /** @brief 重新计算跨会话测试和单次发送活动状态。 */
+    void recalculateActivityState();
     /** @brief 并发连接选中的 TCP 端口。 */
     void connectTcpPorts();
     /** @brief 断开选中的 TCP 端口。 */
